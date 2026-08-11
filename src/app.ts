@@ -33,6 +33,7 @@ import cors from '@fastify/cors'
 import { env } from './config/env.js'
 import { checkDatabase } from './database/client.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
+import { productsRoutes } from './modules/products/products.routes.js'
 import { HttpError } from './types/errors.js'
 import {
   errorEnvelope,
@@ -128,6 +129,7 @@ export function buildApp(): FastifyInstance {
 
   /* Módulos de negocio (cada fase agrega el suyo aquí) */
   void app.register(authRoutes)
+  void app.register(productsRoutes)
 
   /* Rutas no encontradas → envoltorio estándar con data: [] (404) */
   app.setNotFoundHandler((_req, reply) => {
