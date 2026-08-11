@@ -28,8 +28,12 @@ import Fastify, {
   type FastifyReply,
   type FastifyRequest,
 } from 'fastify'
+import jwt from '@fastify/jwt'
+import cors from '@fastify/cors'
 import { env } from './config/env.js'
 import { checkDatabase } from './database/client.js'
+import { authRoutes } from './modules/auth/auth.routes.js'
+import { HttpError } from './types/errors.js'
 import {
   errorEnvelope,
   okEnvelope,
@@ -110,8 +114,20 @@ export function buildApp(): FastifyInstance {
     bodyLimit: 1024 * 1024, // 1 MB — los payloads de venta son pequeños
   })
 
+  /* JWT: firma y verificación de access (24h) + refresh (30d) */
+  void app.register(jwt, {
+    secret: env.jwtSecret,
+    sign: { expiresIn: env.jwtExpiresIn },
+  })
+
+  /* CORS habilitado (LAN local, sin orígenes restringidos por ahora) */
+  void app.register(cors)
+
   /* Registro del healthcheck */
   void app.register(healthRoute)
+
+  /* Módulos de negocio (cada fase agrega el suyo aquí) */
+  void app.register(authRoutes)
 
   /* Rutas no encontradas → envoltorio estándar con data: [] (404) */
   app.setNotFoundHandler((_req, reply) => {
@@ -123,6 +139,13 @@ export function buildApp(): FastifyInstance {
   /* Error handler global: responde SIEMPRE con el envoltorio estándar */
   app.setErrorHandler(
     (err: FastifyError, _req: FastifyRequest, reply: FastifyReply) => {
+      // Errores de dominio (HttpError): usan su propio status y código
+      if (err instanceof HttpError) {
+        return reply
+          .code(err.statusCode)
+          .send(errorEnvelope(err.message, err.statusCode))
+      }
+
       const code = toErrorCode(err)
       const status = statusFor(code)
       let message = err.message || 'Error interno del servidor'
@@ -148,6 +171,11 @@ function toErrorCode(err: unknown): ErrorCode {
   if (isFastifyError(err, 'FST_ERR_CTP_INVALID_MEDIA_TYPE')) return 'VALIDATION_ERROR'
   if (isFastifyError(err, 'FST_ERR_CTP_INVALID_JSON_BODY')) return 'VALIDATION_ERROR'
   if (isFastifyError(err, 'FST_ERR_CTP_EMPTY_JSON_BODY')) return 'VALIDATION_ERROR'
+  // Errores de JWT (token faltante, inválido o expirado)
+  if (isFastifyError(err, 'FST_JWT_NO_AUTHORIZATION_IN_HEADER')) return 'UNAUTHORIZED'
+  if (isFastifyError(err, 'FST_JWT_BAD_REQUEST')) return 'UNAUTHORIZED'
+  if (isFastifyError(err, 'FST_JWT_AUTHORIZATION_TOKEN_INVALID')) return 'UNAUTHORIZED'
+  if (isFastifyError(err, 'FST_JWT_AUTHORIZATION_TOKEN_EXPIRED')) return 'UNAUTHORIZED'
   return 'INTERNAL'
 }
 

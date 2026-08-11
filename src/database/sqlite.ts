@@ -46,12 +46,16 @@ export class SqliteClient implements DbClient {
     sql: string,
     params: unknown[] = [],
   ): Promise<QueryResult<T>> {
-    const stmt = this.db.prepare(translatePlaceholders(sql))
+    const { sql: sqliteSql, params: sqliteParams } = translatePlaceholders(
+      sql,
+      params,
+    )
+    const stmt = this.db.prepare(sqliteSql)
     if (stmt.reader) {
-      const rows = stmt.all(...params) as T[]
+      const rows = stmt.all(...sqliteParams) as T[]
       return Promise.resolve({ rows, rowCount: rows.length })
     }
-    const info = stmt.run(...params)
+    const info = stmt.run(...sqliteParams)
     return Promise.resolve({ rows: [] as T[], rowCount: info.changes })
   }
 
@@ -85,9 +89,25 @@ export class SqliteClient implements DbClient {
 
 /**
  * Traduce placeholders estilo PostgreSQL (`$1, $2…`) a posicionales de
- * SQLite (`?`). No se usan literales con `$N` en el código del servidor,
- * así que el reemplazo global es seguro.
+ * SQLite (`?`) ligando CADA aparición a su valor. Si el mismo `$N` se usa
+ * dos veces (p. ej. created_at y updated_at con el mismo valor), su valor
+ * se liga en ambas posiciones — igual que hace PostgreSQL con parámetros
+ * nombrados. No se usan literales con `$N` en el código del servidor, así
+ * que el reemplazo global es seguro.
  */
-function translatePlaceholders(sql: string): string {
-  return sql.replace(/\$(\d+)/g, '?')
+function translatePlaceholders(
+  sql: string,
+  params: unknown[],
+): { sql: string; params: unknown[] } {
+  const reordered: unknown[] = []
+
+  const translated = sql.replace(/\$(\d+)/g, (_, raw) => {
+    const n = Number(raw)
+    // params viene en orden $1..$N (como en PostgreSQL); ligar cada
+    // aparición (posicional) al mismo valor del array original.
+    reordered.push(params[n - 1])
+    return '?'
+  })
+
+  return { sql: translated, params: reordered }
 }

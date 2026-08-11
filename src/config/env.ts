@@ -42,6 +42,8 @@ export interface AppEnv {
   jwtSecret: string
   /** Vigencia del access token en segundos */
   jwtExpiresIn: number
+  /** Vigencia del refresh token en segundos */
+  jwtRefreshExpiresIn: number
   /** Máximo de dispositivos por tenant (PRD: default 2) */
   deviceLimitDefault: number
   /** Nivel de log de Fastify/pino */
@@ -78,6 +80,7 @@ function loadEnv(): AppEnv {
       process.env.DATABASE_URL ?? 'postgres://pos:pos@127.0.0.1:5432/pos',
     jwtSecret,
     jwtExpiresIn: Number(process.env.JWT_EXPIRES_IN ?? 86400),
+    jwtRefreshExpiresIn: Number(process.env.JWT_REFRESH_EXPIRES_IN ?? 2592000),
     deviceLimitDefault: Number(process.env.DEVICE_LIMIT_DEFAULT ?? 2),
     logLevel: process.env.LOG_LEVEL ?? 'info',
   }
