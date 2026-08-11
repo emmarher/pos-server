@@ -4,6 +4,50 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.4.0] — 2026-08-11 — Ventas (RF-VE)
+
+### Añadido
+
+- **`POST /sales`** — transacción atómica siguiendo el flujo del esquema
+  autoritativo: folio dentro de la transacción → precios → descuentos → INSERT
+  `sales` → `sale_items` → `sale_payments` → triggers automáticos (stock OUT,
+  movimiento de inventario, alerta LOW_STOCK, evento QoS) → `stored_tickets` →
+  COMMIT. Permiso `sales:create`.
+- **Folio por tenant**: en PostgreSQL `nextval('seq_folio_{tenant_id}')`
+  (guiones → guiones bajos, igual que el esquema); en SQLite UPSERT atómico en
+  `folio_sequences` (adaptación documentada). `UNIQUE(tenant, prefix, folio)`
+  protege la unicidad; probado con ventas concurrentes (folios V-000008..012).
+- **Precios y descuentos recalculados desde la BD** (fuente de verdad): precio de
+  `product_prices` vigente por `price_type_id` (fallback `products.price`) y
+  descuentos de `product_discounts` (`discount_types`: P=porcentaje, F=monto
+  fijo) con `minimum_quantity`, vigencia y filtro por tipo de precio.
+- **CAJ (venta por peso)**: producto COUNT con `alternate_quantity` = kg de la
+  báscula → `quantity=1`, subtotal = peso × precio; el stock se descuenta en
+  `base_quantity` (quantity × unit_conversion, trigger). MASS por peso: el
+  `quantity` es el peso real en kg.
+- **Pagos (RF-VE-004/005)**: múltiples métodos por venta (CASH/CARD/TRANSFER/
+  CREDIT/VOUCHER). CASH calcula el vuelto (`change_amount`); CARD/TRANSFER llevan
+  `reference_code`. **Venta a crédito**: valida cliente activo y
+  `credit_limit ≥ saldo + monto`, registra `customer_credits` (amount negativo),
+  actualiza `current_balance` y marca `payment_state = PENDING/PARTIAL`.
+- **`GET /sales/:id`** — venta completa con ítems y pagos (permiso
+  `sales:read_own`).
+- **`stored_tickets`**: se guarda el ticket ESC_POS de texto (negocio, folio,
+  ítems, descuentos, totales, pagos, vuelto) para reimpresión.
+- **Migración `003_sales_triggers.sqlite.sql`**: triggers SQLite equivalentes a
+  PostgreSQL — `base_quantity` (quantity × unit_conversion), descuento de stock
+  + movimiento OUT + alerta LOW_STOCK, restauración de stock al cancelar
+  (RETURN), y evento QoS (PENDING, expira en 5 min). `folio_sequences` como
+  equivalente de la sequence PG.
+
+### Corregido
+
+- Stock insuficiente → `INSUFFICIENT_STOCK` (422) validado DENTRO de la
+  transacción (la venta se revierte completa: sin folio quemado ni filas
+  huérfanas).
+- Pagos que no cubren el total → `VALIDATION_ERROR` (400); el efectivo puede
+  exceder y genera vuelto, los demás métodos no.
+
 ## [0.3.0] — 2026-08-11 — Catálogo de productos (RF-CA)
 
 ### Añadido
@@ -76,9 +120,10 @@ El backend es un repositorio independiente (`pos-server/`).
 
 ### Pendiente
 
-- **Ventas**: `POST /sales` (transacción atómica con folio por `nextval` de
-  `seq_folio_{tenant}`, CAJ, triggers de stock/QoS), cancelación y pagos.
+- **Ventas**: cancelación (`POST /sales/:id/cancel` — el trigger de restauración
+  de stock ya está en la migración 003) y reimpresión de ticket.
 - **Inventario**: entradas de mercancía, lotes FIFO, movimientos y alertas.
-- **Clientes a crédito**, **cortes de caja**, **impresión delegada**
-  (`print_jobs` + polling 2s), **báscula** (heartbeat 500ms), **sync**
-  (PUSH/PULL/ACK) y **reportes** (`/reports/quick-stats`, `/reports/sales-history`).
+- **Clientes a crédito**: abonos (pagos de crédito) y consulta de saldo.
+- **Cortes de caja**, **impresión delegada** (`print_jobs` + polling 2s),
+  **báscula** (heartbeat 500ms), **sync** (PUSH/PULL/ACK) y **reportes**
+  (`/reports/quick-stats`, `/reports/sales-history`).
