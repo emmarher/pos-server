@@ -33,6 +33,7 @@ import cors from '@fastify/cors'
 import { env } from './config/env.js'
 import { checkDatabase } from './database/client.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
+import { inventoryRoutes } from './modules/inventory/inventory.routes.js'
 import { productsRoutes } from './modules/products/products.routes.js'
 import { salesRoutes } from './modules/sales/sales.routes.js'
 import { HttpError } from './types/errors.js'
@@ -132,6 +133,7 @@ export function buildApp(): FastifyInstance {
   void app.register(authRoutes)
   void app.register(productsRoutes)
   void app.register(salesRoutes)
+  void app.register(inventoryRoutes)
 
   /* Rutas no encontradas → envoltorio estándar con data: [] (404) */
   app.setNotFoundHandler((_req, reply) => {
