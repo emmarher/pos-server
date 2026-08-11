@@ -1,0 +1,21 @@
+# ── Dependencias ───────────────────────────────────────────────
+node_modules/
+
+# ── Build de TypeScript ─────────────────────────────────────────
+dist/
+*.tsbuildinfo
+
+# ── Entorno local (nunca versionar secretos) ────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Logs ────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+
+# ── OS / editores ───────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

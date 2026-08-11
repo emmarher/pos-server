@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    /* ── Target / modules ──────────────────────────────────────────── */
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+
+    /* ── Emit ──────────────────────────────────────────────────────── */
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": true,
+    "declaration": false,
+
+    /* ── Strictness (mantener en true — regla del proyecto) ───────── */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* ── Interop ───────────────────────────────────────────────────── */
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+
+    /* ── Otros ─────────────────────────────────────────────────────── */
+    "isolatedModules": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests"]
+}

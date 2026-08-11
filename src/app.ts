@@ -1,0 +1,144 @@
+/**
+ * src/app.ts — Construcción de la aplicación Fastify.
+ *
+ * ────────────────────────────────────────────────────────────────────────
+ * Qué hace este módulo:
+ *   - `buildApp()` crea la instancia de Fastify con logger y config base.
+ *   - Registra el endpoint de salud `/health` (lo usa el discovery del
+ *     cliente para verificar conectividad).
+ *   - Instala el manejador de errores global con formato uniforme
+ *     (ver src/types/index.ts).
+ *
+ * Secciones:
+ *   1) Plugin de salud (healthRoute)
+ *   2) Constructor de la app (buildApp) — punto de entrada para tests
+ *   3) Error handler global
+ * ────────────────────────────────────────────────────────────────────────
+ */
+import Fastify, {
+  type FastifyInstance,
+  type FastifyError,
+  type FastifyReply,
+  type FastifyRequest,
+} from 'fastify'
+import { env } from './config/env.js'
+import { checkDatabase } from './database/pool.js'
+import type { ApiErrorResponse, ErrorCode } from './types/index.js'
+
+/* ── 1) PLUGIN DE SALUD ──────────────────────────────────────────────── */
+
+/**
+ * GET /health — usado por el cliente (pos-mobile) en el descubrimiento
+ * para confirmar que el servidor responde ANTES de intentar login.
+ * Incluye `db: true/false` para que la tablet muestre el estado real
+ * (si PostgreSQL está caído, el POS no puede vender).
+ */
+function healthRoute(app: FastifyInstance): void {
+  // Plugin SÍNCRONO a propósito: solo registra rutas. La ruta interna sí
+  // es async porque consulta la base (checkDatabase → await).
+  app.get('/health', async (_req, reply) => {
+    const db = await checkDatabase()
+    return reply.code(db ? 200 : 503).send({
+      status: db ? 'ok' : 'degraded',
+      service: 'pos-server',
+      db: db ? 'up' : 'down',
+      version: '0.1.0',
+      timestamp: new Date().toISOString(),
+    })
+  })
+}
+
+/* ── 2) CONSTRUCTOR DE LA APP ────────────────────────────────────────── */
+
+/**
+ * Crea y devuelve la instancia de Fastify lista para `listen()` o para
+ * tests (app.inject()). Cada módulo de negocio (auth, products, sales…)
+ * se registrará aquí como plugin en las fases siguientes.
+ */
+export function buildApp(): FastifyInstance {
+  const app = Fastify({
+    logger: {
+      level: env.logLevel,
+    },
+    // La API es local (LAN de sucursal); no hay CORS cross-origin real,
+    // pero habilitarlo evita fricciones con herramientas de testing web.
+    bodyLimit: 1024 * 1024, // 1 MB — los payloads de venta son pequeños
+  })
+
+  /* Registro del healthcheck */
+  void app.register(healthRoute)
+
+  /* Rutas no encontradas → mismo formato de error uniforme (404) */
+  app.setNotFoundHandler((_req, reply) => {
+    const payload: ApiErrorResponse = {
+      error: { code: 'NOT_FOUND', message: 'Recurso no encontrado' },
+    }
+    return reply.code(404).send(payload)
+  })
+
+  /* Error handler global: responde SIEMPRE con ApiErrorResponse */
+  app.setErrorHandler(
+    (err: FastifyError, _req: FastifyRequest, reply: FastifyReply) => {
+      const code = toErrorCode(err)
+      const status = statusFor(code)
+      const payload: ApiErrorResponse = {
+        error: {
+          code,
+          message: err.message || 'Error interno del servidor',
+        },
+      }
+      // Los errores inesperados se loguean completo (el cliente solo ve genérico)
+      if (status >= 500) {
+        app.log.error({ err }, 'Error no manejado')
+        payload.error.message = 'Error interno del servidor'
+      }
+      return reply.code(status).send(payload)
+    },
+  )
+
+  return app
+}
+
+/* ── 3) ERROR HANDLER GLOBAL (helpers) ───────────────────────────────── */
+
+/** Mapea la clase del error a un código de dominio. */
+function toErrorCode(err: unknown): ErrorCode {
+  // Errores Fastify de validación/parseo del payload
+  if (isFastifyError(err, 'FST_ERR_VALIDATION')) return 'VALIDATION_ERROR'
+  if (isFastifyError(err, 'FST_ERR_CTP_INVALID_MEDIA_TYPE')) return 'VALIDATION_ERROR'
+  if (isFastifyError(err, 'FST_ERR_CTP_EMPTY_JSON_BODY')) return 'VALIDATION_ERROR'
+  return 'INTERNAL'
+}
+
+/** HTTP status acorde al código de dominio. */
+function statusFor(code: ErrorCode): number {
+  switch (code) {
+    case 'UNAUTHORIZED':
+      return 401
+    case 'FORBIDDEN':
+    case 'LICENSE_EXPIRED':
+    case 'DEVICE_LIMIT':
+      return 403
+    case 'NOT_FOUND':
+      return 404
+    case 'CONFLICT':
+    case 'TENANT_MISMATCH':
+      return 409
+    case 'VALIDATION_ERROR':
+      return 400
+    case 'INSUFFICIENT_STOCK':
+      return 422
+    default:
+      return 500
+  }
+}
+
+/** Comprueba si el error de Fastify tiene el code indicado. */
+function isFastifyError(err: unknown, code: string): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: string }).code === code
+  )
+}
