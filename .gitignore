@@ -10,6 +10,12 @@ dist/
 .env.*
 !.env.example
 
+# ── SQLite de desarrollo/pruebas (se migra a PostgreSQL en prod) ─
+data/
+*.sqlite
+*.sqlite3
+*.db
+
 # ── Logs ────────────────────────────────────────────────────────
 *.log
 npm-debug.log*

@@ -29,7 +29,7 @@ import Fastify, {
   type FastifyRequest,
 } from 'fastify'
 import { env } from './config/env.js'
-import { checkDatabase } from './database/pool.js'
+import { checkDatabase } from './database/client.js'
 import {
   errorEnvelope,
   okEnvelope,
