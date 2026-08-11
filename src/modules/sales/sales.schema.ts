@@ -168,6 +168,17 @@ export const saleDetailSchema: ApiDataSchema = {
   },
 }
 
+/* ── Body de POST /sales/:id/cancel ────────────────────────────────────── */
+
+export const cancelSaleBodySchema: ApiDataSchema = {
+  type: 'object',
+  required: ['reason'],
+  additionalProperties: false,
+  properties: {
+    reason: { type: 'string', minLength: 1, maxLength: 500 },
+  },
+}
+
 /* ── Params de ruta ────────────────────────────────────────────────────── */
 
 export const idParamsSchema: ApiDataSchema = {

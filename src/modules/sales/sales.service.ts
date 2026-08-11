@@ -630,6 +630,114 @@ export async function getSale(tenantId: string, saleId: string): Promise<SaleDet
   }
 }
 
+/* ── POST /sales/:id/cancel ───────────────────────────────────────────── */
+
+/** Fila de venta mínima para cancelar (aislada por tenant). */
+interface SaleCancelRow {
+  id: string
+  folio_display: string
+  status: string
+  payment_state: string
+  subtotal: number
+  discount: number
+  total: number
+  customer_id: string | null
+}
+
+/**
+ * Cancela una venta COMPLETED (permiso `sales:cancel` en la ruta).
+ * El trigger `trg_sales_restore_stock` restaura el stock y genera el
+ * movimiento RETURN automáticamente (no se reimplementa en JS).
+ * Adicionalmente:
+ *   - Si la venta era a crédito (PENDING/PARTIAL), revierte el saldo del
+ *     cliente con un customer_credits ADJUSTMENT positivo (deshace el débito
+ *     de la venta).
+ *   - El evento QoS pendiente se marca EXPIRED (skill sales-transaction).
+ */
+export async function cancelSale(
+  actor: SaleActor,
+  saleId: string,
+  reason: string,
+): Promise<SaleResponse> {
+  const { tenant_id, seller_id } = actor
+
+  return db.transaction(async (tx) => {
+    const { rows } = await tx.query<SaleCancelRow>(
+      `SELECT id, folio_display, status, payment_state, subtotal, discount, total, customer_id
+       FROM sales WHERE tenant_id = $1 AND id = $2`,
+      [tenant_id, saleId],
+    )
+    const sale = rows[0]
+    if (!sale) throw new HttpError('NOT_FOUND', 'Venta no encontrada')
+
+    if (sale.status !== 'COMPLETED') {
+      throw new HttpError('CONFLICT', `La venta ${sale.folio_display} ya no puede cancelarse (estado: ${sale.status})`)
+    }
+
+    const now = new Date().toISOString()
+
+    /* 1) Marcar cancelada — el trigger trg_sales_restore_stock restaura stock */
+    await tx.query(
+      `UPDATE sales
+       SET status = 'CANCELLED', cancelled_at = $3, cancelled_by = $4,
+           cancel_reason = $5, updated_at = $6
+       WHERE tenant_id = $1 AND id = $2`,
+      [tenant_id, saleId, now, seller_id, reason.trim(), now],
+    )
+
+    /* 2) Revertir crédito si la venta tenía saldo pendiente (RF-VE-005) */
+    if (sale.payment_state !== 'PAID' && sale.customer_id) {
+      const { rows: creditRows } = await tx.query<{ total: number }>(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM customer_credits
+         WHERE tenant_id = $1 AND customer_id = $2 AND sale_id = $3 AND type = 'SALE'`,
+        [tenant_id, sale.customer_id, saleId],
+      )
+      const creditApplied = Number(creditRows[0]?.total ?? 0)
+      if (creditApplied < 0) {
+        const reversal = Math.abs(creditApplied)
+        await tx.query(
+          `INSERT INTO customer_credits
+             (tenant_id, customer_id, sale_id, amount, type, notes, created_by, created_at)
+           VALUES ($1, $2, $3, $4, 'ADJUSTMENT', $5, $6, $7)`,
+          [
+            tenant_id,
+            sale.customer_id,
+            saleId,
+            reversal,
+            `Cancelación de venta ${sale.folio_display}`,
+            seller_id,
+            now,
+          ],
+        )
+        await tx.query(
+          `UPDATE customers SET current_balance = current_balance - $3, updated_at = $4
+           WHERE tenant_id = $1 AND id = $2`,
+          [tenant_id, sale.customer_id, reversal, now],
+        )
+      }
+    }
+
+    /* 3) Reset QoS: el evento pendiente de la venta se expira (no aplicar) */
+    await tx.query(
+      `UPDATE service_quality_events SET status = 'EXPIRED'
+       WHERE tenant_id = $1 AND sale_id = $2 AND status = 'PENDING'`,
+      [tenant_id, saleId],
+    )
+
+    return {
+      id: sale.id,
+      tenant_id,
+      folio: sale.folio_display,
+      status: 'CANCELLED',
+      payment_state: 'PAID',
+      subtotal: Number(sale.subtotal),
+      total_discount: Number(sale.discount),
+      total: Number(sale.total),
+      created_at: now,
+    }
+  })
+}
+
 /* ── Ticket ESC/POS (texto plano, content_format='ESC_POS') ───────────── */
 
 interface TicketInput {

@@ -4,6 +4,31 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.5.0] — 2026-08-11 — Cancelación de ventas (RF-VE-006)
+
+### Añadido
+
+- **`POST /sales/:id/cancel`** — cancela una venta `COMPLETED` (permiso
+  `sales:cancel`; el vendedor NO lo tiene, solo Administrador). Body
+  `{ reason }` obligatorio (máx. 500 chars, espejo de `cancelSale` del móvil).
+- **Efectos de la cancelación** (dentro de la misma transacción):
+  - El trigger `trg_sales_restore_stock` restaura el stock y genera el
+    movimiento `RETURN` automáticamente (no se reimplementa en JS).
+  - Si la venta era a crédito (PENDING/PARTIAL), revierte el saldo del cliente
+    con un `customer_credits` tipo `ADJUSTMENT` positivo (deshace el débito).
+  - El evento QoS pendiente de la venta se marca `EXPIRED`.
+  - Guardias: venta ya cancelada → 409, venta inexistente → 404, sin `reason`
+    → 400, sin permiso → 403.
+
+### Corregido
+
+- **Movimiento RETURN con `inventory_before/after` reales**: la migración 003
+  registraba `before=stock+base` y `after=stock+2×base` porque el SELECT leía
+  el stock DESPUÉS del UPDATE de restauración. La migración
+  `004_fix_return_movement.sqlite.sql` (DROP + CREATE del trigger) lo corrige:
+  `before = stock restaurado − base`, `after = stock restaurado`. El OUT ya
+  registraba los valores correctos.
+
 ## [0.4.0] — 2026-08-11 — Ventas (RF-VE)
 
 ### Añadido
