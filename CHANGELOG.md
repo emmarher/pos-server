@@ -152,3 +152,58 @@ El backend es un repositorio independiente (`pos-server/`).
 - **Cortes de caja**, **impresión delegada** (`print_jobs` + polling 2s),
   **báscula** (heartbeat 500ms), **sync** (PUSH/PULL/ACK) y **reportes**
   (`/reports/quick-stats`, `/reports/sales-history`).
+
+## [0.6.0] — 2026-08-11 — Inventario (RF-IN)
+
+### Añadido
+
+- **`GET /inventory/locations`** — lista ubicaciones del tenant (permiso
+  `inventory:read`). La ubicación "STORE" se crea automáticamente al registrar
+  el tenant.
+- **`POST /inventory/locations`** — crea una nueva ubicación (permiso
+  `inventory:adjust`; código único por tenant, rechazo 409 si ya existe).
+- **`PATCH /inventory/locations/:id`** — actualiza nombre/estado de una ubicación.
+- **`GET /inventory/lots`** — lista lotes con filtros por `product_id` y
+  `movement_type` (permiso `inventory:read`).
+- **`POST /inventory/lots`** — alta manual de lote (permiso `inventory:adjust`);
+  permite `lot_number`, `quantity`, `expiry_date`.
+- **`GET /inventory/movements`** — trazabilidad completa con filtros
+  (`product_id`, `movement_type`), paginación y conteo total (permiso
+  `inventory:read`).
+- **`POST /inventory/adjustments`** — ajuste manual de stock con motivo
+  obligatorio (permiso `inventory:adjust`). Rechaza ajustes que dejarían
+  stock negativo (422 `INSUFFICIENT_STOCK`).
+- **`GET /purchase-orders`** — lista órdenes de compra/entrada del tenant
+  (permiso `inventory:read`).
+- **`POST /purchase-orders`** — entrada transaccional de mercancía (permiso
+  `inventory:purchase`): registra `purchase_orders` + `purchase_order_items`,
+  aumenta `products.stock`, crea/actualiza `inventory_lots`, registra
+  `inventory_movements` tipo `IN` con `before/after`, y actualiza el costo
+  promedio ponderado: `new_cost = (old_cost × old_qty + unit_cost × qty) /
+  (old_qty + qty)`.
+- **`GET /purchase-orders/:id`** — detalle con ítems y lotes (permiso
+  `inventory:read`).
+- **`GET /inventory/alerts`** — bandeja de alertas `LOW_STOCK` (activadas
+  por el trigger de venta cuando `stock ≤ min_stock`); filtro por
+  `resolved` y `alert_type`; paginación (permiso `inventory:read`).
+- **`PATCH /inventory/alerts/:id`** — marca alerta como resuelta
+  (permiso `inventory:adjust`).
+- **`GET /suppliers`** — lista proveedores del tenant (permiso
+  `inventory:read`).
+- **`POST /suppliers`** — crea proveedor (permiso `suppliers:manage`).
+
+### Corregido
+
+- Fórmula costo promedio ponderado actualizada: `new_cost = (old_cost × old_stock
+  + unit_cost × qty) / (old_stock + qty)`. Protección contra división por cero:
+  si `old_stock = 0`, el nuevo costo es simplemente `unit_cost`.
+
+### Pendiente
+
+- **Ventas**: cancelación (`POST /sales/:id/cancel` — el trigger de restauración
+  de stock ya está en la migración 003) y reimpresión de ticket.
+- **Inventario**: entradas de mercancía, lotes FIFO, movimientos y alertas.
+- **Clientes a crédito**: abonos (pagos de crédito) y consulta de saldo.
+- **Cortes de caja**, **impresión delegada** (`print_jobs` + polling 2s),
+  **báscula** (heartbeat 500ms), **sync** (PUSH/PULL/ACK) y **reportes**
+  (`/reports/quick-stats`, `/reports/sales-history`).
