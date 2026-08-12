@@ -185,7 +185,7 @@
 
 ## Última Actualización
 - **Fecha**: 2026-08-12
-- **Commit**: (pendiente) — fix: compilación reparada (104→0 errores TS) + UDP Discovery conectado y probado
+- **Commit**: `ef88776` — fix: compilación reparada (104→0 errores TS) + UDP Discovery conectado y probado
 - **Estado**: `tsc --noEmit` 0 errores, `eslint` 0 errores, servidor arranca y responde al broadcast `POS_DISCOVER`
 - **Próximo módulo**: Impresión delegada (print queue) — siguiente paso recomendado
 
