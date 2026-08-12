@@ -1,0 +1,46 @@
+# ── Dependencias ───────────────────────────────────────────────
+node_modules/
+
+# ── Build y compilación ────────────────────────────────────────
+dist/
+*.tsbuildinfo
+
+# ── Datos y base de desarrollo ─────────────────────────────────
+data/
+*.sqlite
+*.sqlite3
+*.db
+
+# ── Entorno y secretos ─────────────────────────────────────────
+.env
+.env.*
+
+# ── Logs ────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ── Archivos generados por npm/yarn ─────────────────────────────
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ── OS / editores ───────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ── Reportes de testing ─────────────────────────────────────────
+coverage/
+*.coverage.*
+test-results/
+*.test-report.*
+
+# ── Archivos temporales ─────────────────────────────────────────
+*.tmp
+*.temp
+
+# ── Changelog (lo mantenemos, pero si es muy grande puede excluirse) ─
+CHANGELOG.md
