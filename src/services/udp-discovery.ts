@@ -8,12 +8,16 @@
  * RF-DS: Discovery UDP
  */
 
-import * as dgram from "dgram";
-import { db } from "../database/client.js";
+import * as dgram from 'dgram'
+import type { FastifyInstance } from 'fastify'
+import { db } from '../database/client.js'
 
 // Configuración del descubrimiento
 const DISCOVER_PORT = 5000;
 const DISCOVER_MESSAGE = "POS_DISCOVER";
+
+// Puerto HTTP del API Fastify — el que la tablet usará para conectarse
+const API_PORT = 3000;
 
 // Interfaz para la respuesta de descubrimiento
 export interface DiscoveryResponse {
@@ -42,8 +46,8 @@ async function fetchActiveTenant(): Promise<{ id: string; name: string } | null>
       "SELECT id, name FROM tenants WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1"
     );
     if (result.rows.length > 0) {
-      const tenant = result.rows[0];
-      return { id: tenant.id, name: tenant.name };
+      const tenant = result.rows[0]!
+      return { id: tenant.id, name: tenant.name }
     }
     console.warn("⚠️ No active tenant found in database");
     return null;
@@ -57,79 +61,76 @@ async function fetchActiveTenant(): Promise<{ id: string; name: string } | null>
  * Inicializa el tenant activo (se llama al iniciar el servicio)
  */
 async function initializeTenant(): Promise<void> {
-  const tenant = await fetchActiveTenant();
+  const tenant = await fetchActiveTenant()
   if (tenant) {
-    activeTenantId = tenant.id;
-    activeTenantName = tenant.name;
-    console.log(`🏢 Active tenant for discovery: ${tenant.name} (${tenant.id})`);
+    activeTenantId = tenant.id
+    activeTenantName = tenant.name
+    console.log(`🏢 Active tenant for discovery: ${tenant.name} (${tenant.id})`)
   } else {
     // Fallback para desarrollo si no hay tenant en BD
-    activeTenantId = "DEMO-0001";
-    activeTenantName = "Demo Tenant";
-    console.warn("⚠️ Using fallback tenant for discovery");
+    activeTenantId = 'DEMO-0001'
+    activeTenantName = 'Demo Tenant'
+    console.warn('⚠️ Using fallback tenant for discovery')
   }
 }
 
 /**
  * Inicia el servicio de descubrimiento UDP
  */
-export function startDiscovery(): Promise<void> {
+export async function startDiscovery(): Promise<void> {
   if (isRunning) {
     console.warn("⚠️ Discovery service already running");
-    return Promise.resolve();
+    return;
   }
 
-  return new Promise(async (resolve, reject) => {
-    try {
-      // Primero obtener el tenant activo
-      await initializeTenant();
+  // Primero obtener el tenant activo
+  await initializeTenant();
 
-      // Crear socket UDP
-      discoverSocket = dgram.createSocket("udp4");
+  // Crear socket UDP
+  const socket = dgram.createSocket("udp4");
+  discoverSocket = socket;
 
-      // Cuando recibamos un paquete, respondemos
-      discoverSocket.on("message", (msg: Buffer, rinfo: dgram.RemoteInfo) => {
-        if (msg.toString().trim() === DISCOVER_MESSAGE) {
-          try {
-            // Obtener tenant_id del tenant activo
-            const tenantId = activeTenantId ?? "DEMO-0001";
-            const deviceName = activeTenantName ? `POS-Server-${activeTenantName}` : `POS-Server-${tenantId}`;
+  // Cuando recibamos un paquete, respondemos
+  socket.on("message", (msg: Buffer, rinfo: dgram.RemoteInfo) => {
+    if (msg.toString().trim() === DISCOVER_MESSAGE) {
+      try {
+        // Obtener tenant_id del tenant activo
+        const tenantId = activeTenantId ?? "DEMO-0001";
+        const deviceName = activeTenantName ? `POS-Server-${activeTenantName}` : `POS-Server-${tenantId}`;
 
-            const response: DiscoveryResponse = {
-              ip: rinfo.address,
-              port: rinfo.port,
-              tenant_id: tenantId,
-              device_name: deviceName,
-              api_version: "4.0.0",
-            };
+        const response: DiscoveryResponse = {
+          ip: rinfo.address,
+          port: API_PORT,
+          tenant_id: tenantId,
+          device_name: deviceName,
+          api_version: "4.0.0",
+        };
 
-            // Enviar respuesta al cliente descubridor
-            const responseBuf = Buffer.from(JSON.stringify(response));
-            discoverSocket.send(responseBuf, 0, responseBuf.length, DISCOVER_PORT, rinfo.address);
+        // Enviar respuesta AL PUERTO DE ORIGEN del cliente (rinfo.port),
+        // no al puerto de escucha. Así la tablet que hizo el broadcast
+        // recibe la respuesta en su socket efímero.
+        const responseBuf = Buffer.from(JSON.stringify(response))
+        socket.send(responseBuf, 0, responseBuf.length, rinfo.port, rinfo.address)
 
-            console.log(`📡 Discovery response sent to ${rinfo.address}:${rinfo.port} for tenant ${tenantId}`);
-          } catch (err) {
-            console.error("❌ Error generating discovery response:", err);
-          }
-        }
-      });
-
-      // Cuando haya un error en el socket
-      discoverSocket.on("error", (err) => {
-        console.error(`❌ Discovery UDP socket error: ${err.message}`);
-      });
-
-      // Escuchar en todas las interfaces (0.0.0.0)
-      discoverSocket.bind(DISCOVER_PORT, "0.0.0.0", () => {
-        isRunning = true;
-        console.log(`🟢 UDP Discovery listening on port ${DISCOVER_PORT}`);
-        resolve();
-      });
-
-    } catch (err) {
-      console.error("❌ Failed to start Discovery UDP service:", err);
-      reject(err);
+        console.log(`📡 Discovery response sent to ${rinfo.address}:${rinfo.port} for tenant ${tenantId}`);
+      } catch (err) {
+        console.error("❌ Error generating discovery response:", err);
+      }
     }
+  });
+
+  // Cuando haya un error en el socket
+  socket.on("error", (err) => {
+    console.error(`❌ Discovery UDP socket error: ${err.message}`);
+  });
+
+  // Escuchar en todas las interfaces (0.0.0.0)
+  await new Promise<void>((resolve) => {
+    socket.bind(DISCOVER_PORT, "0.0.0.0", () => {
+      isRunning = true;
+      console.log(`🟢 UDP Discovery listening on port ${DISCOVER_PORT}`);
+      resolve();
+    });
   });
 }
 
@@ -166,9 +167,9 @@ export function getCurrentTenantName(): string {
  * Register discovery endpoint in Fastify app
  * Integrates with the main server setup
  */
-export function registerDiscoveryRoutes(fastify: any, options: any): void {
+export function registerDiscoveryRoutes(app: FastifyInstance): void {
   // Endpoint para verificar estado del servicio de descubrimiento
-  fastify.get("/discovery/status", async () => {
+  app.get('/discovery/status', () => {
     return {
       isRunning,
       port: DISCOVER_PORT,
@@ -179,7 +180,7 @@ export function registerDiscoveryRoutes(fastify: any, options: any): void {
   });
 
   // Endpoint para obtener configuración de discovery (útil para QR/manual fallback)
-  fastify.get("/discovery/config", async () => {
+  app.get('/discovery/config', () => {
     return {
       udpPort: DISCOVER_PORT,
       discoverMessage: DISCOVER_MESSAGE,
@@ -188,7 +189,7 @@ export function registerDiscoveryRoutes(fastify: any, options: any): void {
       fallback: {
         qrCode: generateDiscoveryQR(),
         manualInput: {
-          defaultIp: "127.0.0.1",
+          defaultIp: '127.0.0.1',
           defaultPort: 3000,
         },
       },

@@ -17,6 +17,7 @@
  * ────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { AuthJwtPayload } from '../../types/auth.js'
 import { authenticate, requirePermission } from '../../middleware/auth.js'
 import { okEnvelope, okEnvelopeSchema } from '../../types/response.js'
 import {
@@ -40,9 +41,10 @@ import {
 } from './cashier.service.js'
 
 /** Request autenticado: el JWT trae tenant_id, sub (seller) y permisos. */
-type AuthedRequest = FastifyRequest & {
-  user: { tenant_id: string; sub: string; permissions: string[]; name: string }
-}
+type AuthedRequest = FastifyRequest & { user: AuthJwtPayload }
+
+/** Params de rutas con :id (turn-end, daily-end, withdrawal). */
+type ParamsWithId = { id: string }
 
 /** Plugin Fastify que registra las rutas del módulo de caja. */
 export function cashierRoutes(app: FastifyInstance): void {
@@ -82,12 +84,10 @@ export function cashierRoutes(app: FastifyInstance): void {
     async (request: AuthedRequest) => {
       const input = request.body as EndCutInput
       const cut = await endCut(
-        { tenant_id: request.user.tenant_id, user_id: request.user.sub, name: request.user.name },
+        { tenant_id: request.user.tenant_id, user_id: request.user.sub },
         input,
-        request.params.id,
+        (request.params as ParamsWithId).id,
       )
-      // Nota: la ruta usa params.id; ajustar si se pasa en body
-      // Por ahora esperamos que venga en el body o query; ajustar firma si es necesario
       return okEnvelope(cut, 'Corte de turno finalizado', 200)
     },
   )
@@ -128,9 +128,9 @@ export function cashierRoutes(app: FastifyInstance): void {
     async (request: AuthedRequest) => {
       const input = request.body as EndCutInput
       const cut = await endCut(
-        { tenant_id: request.user.tenant_id, user_id: request.user.sub, name: request.user.name },
+        { tenant_id: request.user.tenant_id, user_id: request.user.sub },
         input,
-        request.params.id,
+        (request.params as ParamsWithId).id,
       )
       return okEnvelope(cut, 'Corte diario finalizado', 200)
     },
@@ -152,9 +152,9 @@ export function cashierRoutes(app: FastifyInstance): void {
     async (request: AuthedRequest) => {
       const input = request.body as WithdrawalInput
       const withdrawal = await createWithdrawal(
-        { tenant_id: request.user.tenant_id, user_id: request.user.sub, name: request.user.name },
+        { tenant_id: request.user.tenant_id, user_id: request.user.sub },
         input,
-        request.params.id, // cashier_cut_id
+        (request.params as ParamsWithId).id, // cashier_cut_id
       )
       return okEnvelope(withdrawal, 'Retiro de caja registrado', 200)
     },
@@ -174,7 +174,7 @@ export function cashierRoutes(app: FastifyInstance): void {
       },
     },
     async (request: AuthedRequest) => {
-      const input = request.body as ReprintTicketInput
+      const input = request.body as ReprintCutInput
       const ticket = await getCutTicketContent(request.user.tenant_id, input)
       return okEnvelope(ticket, 'Ticket de corte reimpreso', 200)
     },

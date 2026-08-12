@@ -13,6 +13,7 @@ import { HttpError } from '../../types/errors.js'
 import type {
   Customer,
   CustomerSearchResult,
+  CustomerQuery,
   CustomerInput,
   CustomerCreditAdjustment,
   CustomerCreditResponse,
@@ -21,8 +22,11 @@ import type {
 
 /* ── SELECT con balance ────────────────────────────────────────────────── */
 
-const CUSTOMER_BALANCE_SELECT =
-  'SELECT c.id, c.tenant_id, c.name, c.description, c.phone, c.email, c.address, c.rfc, c.credit_limit, c.current_balance, c.loyalty_points, c.loyalty_points_value, c.is_active, c.created_at, c.updated_at, COALESCE(SUM(cc.amount), 0) AS total_credit FROM customers c LEFT JOIN customer_credits cc ON cc.tenant_id = c.tenant_id AND cc.customer_id = c.id AND cc.type = \'SALE\' WHERE c.tenant_id = $1 GROUP BY c.id';
+/** Fila de BD: cliente + total_credit calculado por el LEFT JOIN. */
+interface CustomerRow extends Omit<Customer, 'is_active'> {
+  total_credit: number
+  is_active: number
+}
 
 /* ── Listado ──────────────────────────────────────────────────────────── */
 
@@ -36,7 +40,7 @@ export async function listCustomers(
   const q = params.q?.trim() ?? '';
 
   const values: unknown[] = [tenantId];
-  let cond = 2;
+  const cond = 2;
 
   if (activeOnly) {
     values.push(1);
@@ -51,20 +55,27 @@ export async function listCustomers(
   const whereSql =
     (activeOnly ? 'AND c.is_active = 1 AND' : '') + ' c.tenant_id = $1 ' + (q ? searchCond : '');
 
+  // Placeholders de paginación: van después de tenant + activeOnly + q
+  const limitPlaceholder = values.length + 1;
+  const offsetPlaceholder = values.length + 2;
+  const pageValues = [...values, limit, offset];
+
   const [{ rows: countRows }, { rows }] = await Promise.all([
     db.query<{ total: number }>(`
       SELECT COUNT(*) AS total FROM customers c ${whereSql} GROUP BY c.id`,
       values,
     ),
-    db.query(`
+    db.query<CustomerRow>(`
       SELECT c.id, c.tenant_id, c.name, c.description, c.phone, c.email, c.address,
         c.rfc, c.credit_limit, c.current_balance, c.loyalty_points,
         c.loyalty_points_value, c.is_active, c.created_at, c.updated_at,
         COALESCE(SUM(cc.amount), 0) AS total_credit
       FROM customers c
-      LEFT JOIN customer_credits cc ON cc.tenant_id = c.tenant_id AND cc.customer_id = c.id AND cc.type = \'SALE\'
-      WHERE ${whereSql} GROUP BY c.id`,
-      values,
+      LEFT JOIN customer_credits cc ON cc.tenant_id = c.tenant_id AND cc.customer_id = c.id AND cc.type = 'SALE'
+      WHERE ${whereSql} GROUP BY c.id
+      ORDER BY c.created_at DESC
+      LIMIT $${limitPlaceholder} OFFSET $${offsetPlaceholder}`,
+      pageValues,
     ),
   ]);
 
@@ -84,20 +95,20 @@ export async function listCustomers(
     is_active: r.is_active === 1,
     created_at: r.created_at,
     updated_at: r.updated_at,
-  } as Customer));
+  }));
 
   return { items, total: countRows[0]?.total ?? 0 };
 }
 
 /** Obtiene un cliente por ID con balance calculado. */
 export async function getCustomer(tenantId: string, id: string): Promise<Customer> {
-  const { rows } = await db.query(`
+  const { rows } = await db.query<CustomerRow>(`
     SELECT c.id, c.tenant_id, c.name, c.description, c.phone, c.email, c.address,
       c.rfc, c.credit_limit, c.current_balance, c.loyalty_points, c.loyalty_points_value,
       c.is_active, c.created_at, c.updated_at,
       COALESCE(SUM(cc.amount), 0) AS total_credit
     FROM customers c
-    LEFT JOIN customer_credits cc ON cc.tenant_id = c.tenant_id AND cc.customer_id = c.id AND cc.type = \'SALE\'
+    LEFT JOIN customer_credits cc ON cc.tenant_id = c.tenant_id AND cc.customer_id = c.id AND cc.type = 'SALE'
     WHERE c.tenant_id = $1 AND c.id = $2 GROUP BY c.id`,
     [tenantId, id],
   );
@@ -130,7 +141,7 @@ export async function createCustomer(
   input: CustomerInput,
 ): Promise<Customer> {
   const now = 'now';
-  const { rows } = await db.query<{ id: string }>(`
+  const { rows } = await db.query<CustomerRow>(`
     INSERT INTO customers
        (tenant_id, name, description, phone, email, address, rfc,
         credit_limit, current_balance, loyalty_points, loyalty_points_value,
@@ -174,7 +185,7 @@ export async function updateCustomer(
   const now = 'now';
 
   const updateQ =
-    'UPDATE customers SET name = $3, description = $4, phone = $5, email = $5, address = $6, rfc = $7, credit_limit = $8, is_active = $9, updated_at = $10 WHERE tenant_id = $1 AND id = $2 RETURNING id, tenant_id, name, description, phone, email, address, rfc, credit_limit, current_balance, loyalty_points, loyalty_points_value, is_active, created_at, updated_at';
+    'UPDATE customers SET name = $3, description = $4, phone = $5, email = $6, address = $7, rfc = $8, credit_limit = $9, is_active = $10, updated_at = $11 WHERE tenant_id = $1 AND id = $2 RETURNING id, tenant_id, name, description, phone, email, address, rfc, credit_limit, current_balance, loyalty_points, loyalty_points_value, is_active, created_at, updated_at';
   const vals = [tenantId, id,
     input.name ?? current.name,
     input.description ?? current.description,
@@ -187,7 +198,7 @@ export async function updateCustomer(
     now,
   ];
 
-  const { rows } = await db.query<{ id: string }>(updateQ, vals);
+  const { rows } = await db.query<CustomerRow>(updateQ, vals);
   const customer = rows[0];
   if (!customer) throw new HttpError('NOT_FOUND', 'Cliente no encontrado');
   return {
@@ -246,12 +257,12 @@ export async function makeCreditAdjustment(
   const now = 'now';
   const newBalance = creditCheck.newBalance;
 
-  db.query(
+  await db.query(
     'INSERT INTO customer_credits (tenant_id, customer_id, amount, type, notes, created_by, created_at) VALUES ($1, $2, $3, \'ADJUSTMENT\', $4, $5, $6)',
     [tenant_id, customer_id, input.amount, input.reason.trim(), user_id, now],
   );
 
-  db.query(
+  await db.query(
     'UPDATE customers SET current_balance = $3, updated_at = $4 WHERE tenant_id = $1 AND id = $2',
     [tenant_id, customer_id, newBalance, now],
   );
@@ -268,28 +279,5 @@ export async function makeCreditPayment(
   actor: { tenant_id: string; user_id: string; customer_id: string },
   input: CustomerPaymentPayload,
 ): Promise<CustomerCreditResponse> {
-  return await makeCreditAdjustment(actor, {
-    customer_id: input.customer_id,
-    amount: input.amount,
-    reason: input.reason,
-  });
-}
-
-/* ── Conversión de errores de la BD ───────────────────────────────────── */
-
-function toHttpError(err: unknown, fallback: string): HttpError {
-  if (err instanceof HttpError) return err;
-  const message = err instanceof Error ? err.message : '';
-  const code = (err as { code?: string })?.code ?? '';
-
-  if (code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE/i.test(message)) {
-    return new HttpError('CONFLICT', 'Ya existe un cliente con ese RFC o nombre');
-  }
-  if (code === 'SQLITE_CONSTRAINT_CHECK' || /CHECK/i.test(message)) {
-    return new HttpError('VALIDATION_ERROR', 'El registro no cumple las reglas de validación');
-  }
-  if (code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || /FOREIGN KEY/i.test(message)) {
-    return new HttpError('CONFLICT', 'Referencia no válida o recurso en uso');
-  }
-  return new HttpError('INTERNAL', fallback);
+  return await makeCreditAdjustment(actor, input);
 }

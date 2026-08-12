@@ -44,3 +44,36 @@ export interface CustomerQuery {
   /** Offset. */
   offset?: number
 }
+
+/** Payload de creación/actualización de cliente (espejo de customerCreateBodySchema). */
+export interface CustomerInput {
+  name: string
+  description?: string | null
+  phone?: string | null
+  email?: string | null
+  address?: string | null
+  rfc?: string | null
+  credit_limit?: number
+  is_active?: boolean
+}
+
+/** Cargo o abono al crédito (POST /customers/:id/credit). */
+export interface CustomerCreditAdjustment {
+  customer_id: string
+  amount: number
+  reason: string
+}
+
+/** Pago a crédito (POST /customers/:id/payment). */
+export interface CustomerPaymentPayload {
+  customer_id: string
+  amount: number
+  reason: string
+}
+
+/** Respuesta de un ajuste/pago de crédito (nuevo balance). */
+export interface CustomerCreditResponse {
+  new_balance: number
+  exceeded_limit: boolean
+  message: string
+}

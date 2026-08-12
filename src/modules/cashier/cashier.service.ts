@@ -35,14 +35,65 @@ export interface ReprintCutInput {
   cashier_cut_id: string
 }
 
+/* ── Tipos de filas de BD ──────────────────────────────────────────────── */
+
+interface CashierCutRow {
+  id: string
+  tenant_id: string
+  cut_type: 'TURN' | 'DAILY'
+  start_at: string
+  end_at: string | null
+  status: 'OPEN' | 'CLOSED'
+  total_sales: number | null
+  total_transactions: number | null
+  cash_amount: number | null
+  card_amount: number | null
+  transfer_amount: number | null
+  credit_amount: number | null
+  expected_cash: number | null
+  counted_cash: number | null
+  difference: number | null
+}
+
+interface SalePaymentRow {
+  method: string
+  amount: number | null
+  change_amount: number | null
+}
+
+interface SaleRow {
+  id: string
+  folio_display: string
+  subtotal: number | null
+  total: number | null
+  status: string
+}
+
+interface SaleItemRow {
+  product_name: string
+  quantity: number
+  unit_price: number
+  subtotal: number
+}
+
+interface WithdrawalRow {
+  id: string
+  tenant_id: string
+  cashier_cut_id: string
+  amount: number
+  reason: string
+  created_by: string
+  created_at: string
+}
+
 /* ── Iniciar un corte (TURN o DAILY) ────────────────────────────────────── */
 
-export async function startCut(tenantId: string, input: StartCutInput): Promise<any> {
+export async function startCut(tenantId: string, input: StartCutInput): Promise<CashierCutRow> {
   const cutType = input.cut_type
   const now = new Date().toISOString()
   const branchId = input.branch_id ?? null
 
-  const { rows } = await db.query(`
+  const { rows } = await db.query<CashierCutRow>(`
     INSERT INTO cashier_cuts
       (tenant_id, branch_id, cut_type, start_at, status, cloud_sync_status, created_at, updated_at)
     VALUES ($1, $2, $3, $4, 'OPEN', 'PENDING', $5, $5)
@@ -56,38 +107,52 @@ export async function startCut(tenantId: string, input: StartCutInput): Promise<
 
 /* ── Finalizar un corte (TURN o DAILY) ──────────────────────────────────── */
 
-export async function endCut(actor: { tenant_id: string; user_id: string; name: string },
+export interface EndCutResult {
+  id: string
+  cut_type: 'TURN' | 'DAILY'
+  start_at: string
+  end_at: string
+  status: 'CLOSED'
+  total_transactions: number
+  cash_received: number
+  card_amount: number
+  transfer_amount: number
+  credit_amount: number
+  expected_cash: number
+  counted_cash: number
+  difference: number
+  notes?: string | null
+}
+
+export async function endCut(actor: { tenant_id: string; user_id: string },
                             input: EndCutInput,
-                            cutId: string): Promise<any> {
-  const { tenant_id, user_id } = actor
+                            cutId: string): Promise<EndCutResult> {
+  const { tenant_id } = actor
   const countedCash = Number(input.counted_cash)
   const now = new Date().toISOString()
 
   // 1) Obtener el corte actual
-  const { rows: cutRows } = await db.query(`
+  const { rows: cutRows } = await db.query<CashierCutRow>(`
     SELECT id, tenant_id, cut_type, start_at, end_at, status,
            total_sales, total_transactions, cash_amount, card_amount, transfer_amount, credit_amount,
-           expected_cash, counted_cash, difference, status AS cut_status
+           expected_cash, counted_cash, difference
     FROM cashier_cuts WHERE id = $1 AND tenant_id = $2
   `, [cutId, tenant_id])
 
   const cut = cutRows[0]
   if (!cut) throw new HttpError('NOT_FOUND', 'Corte no encontrado')
-  if (cut.cut_status !== 'OPEN') {
-    throw new HttpError('CONFLICT', `El corte ${cut.id} ya está finalizado (status: ${cut.cut_status})`)
+  if (cut.status !== 'OPEN') {
+    throw new HttpError('CONFLICT', `El corte ${cut.id} ya está finalizado (status: ${cut.status})`)
   }
 
   // 2) Calcular totales de ventas asociadas a este corte
-  const { rows: salesRows } = await db.query(`
-    SELECT si.sale_id, s.payment_state, si.unit_price, si.discount_applied, si.subtotal,
-           sp.method, sp.amount, sp.change_amount
-    FROM sale_items si
-    JOIN sales s ON s.id = si.sale_id AND s.tenant_id = $1
-    JOIN sale_payments sp ON sp.sale_id = s.id AND s.tenant_id = $1
-    JOIN cashier_cut_sales ccs ON ccs.sale_id = s.id
-    WHERE ccs.cashier_cut_id = $2
-    ORDER BY si.created_at ASC
-  `, [tenant_id, cutId])
+  const { rows: salesRows } = await db.query<SalePaymentRow>(`
+    SELECT sp.method, sp.amount, sp.change_amount
+    FROM sale_payments sp
+    JOIN cashier_cut_sales ccs ON ccs.sale_id = sp.sale_id
+    WHERE ccs.cashier_cut_id = $1
+    ORDER BY sp.created_at ASC
+  `, [cutId])
 
   // 3) Desglose por método de pago
   let cashReceived = 0
@@ -110,7 +175,7 @@ export async function endCut(actor: { tenant_id: string; user_id: string; name: 
   }
 
   // 4) Calcular diferencia (faltante/sobrante)
-  const expectedCash = Number(cut.expected_cash ?? 0) || round2(cashReceived)
+  const expectedCash = round2(cashReceived)
   const difference = round2(countedCash - expectedCash)
 
   // 5) Actualizar el corte con los totales
@@ -130,19 +195,17 @@ export async function endCut(actor: { tenant_id: string; user_id: string; name: 
            updated_at = $13
     WHERE id = $1 AND tenant_id = $2
   `, [cutId, tenant_id, now,
-       transactionCount,    // total_sales actually we need sum, let me reconsider
+       cashReceived,    // total_sales (efectivo + no efectivo se desglosa abajo)
        transactionCount,
        cashReceived,
        cardAmount,
        transferAmount,
        creditAmount,
-       cashReceived,  // expected_cash = counted cash for simplicity, or sum of CASH items
+       expectedCash,
        countedCash,
        difference,
        now]
   )
-
-  // 6) Marcar ventas incluidas en el corte (ya se hace via cashier_cut_sales insert)
 
   return {
     id: cut.id,
@@ -152,9 +215,9 @@ export async function endCut(actor: { tenant_id: string; user_id: string; name: 
     status: 'CLOSED',
     total_transactions: transactionCount,
     cash_received: cashReceived,
-    card_amount,
-    transfer_amount,
-    credit_amount,
+    card_amount: cardAmount,
+    transfer_amount: transferAmount,
+    credit_amount: creditAmount,
     expected_cash: expectedCash,
     counted_cash: countedCash,
     difference,
@@ -164,16 +227,16 @@ export async function endCut(actor: { tenant_id: string; user_id: string; name: 
 
 /* ── Registrar un retiro de caja ────────────────────────────────────────── */
 
-export async function createWithdrawal(actor: { tenant_id: string; user_id: string; name: string },
+export async function createWithdrawal(actor: { tenant_id: string; user_id: string },
                                       input: WithdrawalInput,
-                                      cashierCutId: string): Promise<any> {
+                                      cashierCutId: string): Promise<WithdrawalRow> {
   const { tenant_id, user_id } = actor
   const { amount, reason } = input
   const now = new Date().toISOString()
   const amountNum = Number(amount)
 
   // Verificar que el corte existe y está cerrado
-  const { rows: cutRows } = await db.query(`
+  const { rows: cutRows } = await db.query<CashierCutRow>(`
     SELECT id, status, counted_cash, difference FROM cashier_cuts WHERE id = $1 AND tenant_id = $2
   `, [cashierCutId, tenant_id])
 
@@ -186,7 +249,7 @@ export async function createWithdrawal(actor: { tenant_id: string; user_id: stri
     throw new HttpError('VALIDATION_ERROR', `El retiro $${amountNum} excede el efectivo disponible $${Number(cut.counted_cash ?? 0)} en el corte`)
   }
 
-  const { rows } = await db.query(`
+  const { rows } = await db.query<WithdrawalRow>(`
     INSERT INTO cashier_withdrawals
       (tenant_id, cashier_cut_id, amount, reason, created_by, created_at)
     VALUES ($1, $2, $3, $4, $5, $6)
@@ -225,11 +288,22 @@ interface TicketContent {
   payments: Array<{ method: string; amount: number }>
 }
 
+interface CutWithNamesRow extends CashierCutRow {
+  seller_name: string | null
+  branch_name: string | null
+}
+
+interface CutSaleRow extends SaleRow {
+  method: string
+  amount: number | null
+  change_amount: number | null
+}
+
 export async function getCutTicketContent(tenantId: string, input: ReprintCutInput): Promise<TicketContent> {
   const { cashier_cut_id } = input
 
   // Obtener datos del corte
-  const { rows: cutRows } = await db.query(`
+  const { rows: cutRows } = await db.query<CutWithNamesRow>(`
     SELECT cc.*, u.name AS seller_name, b.name AS branch_name
     FROM cashier_cuts cc
     LEFT JOIN users u ON u.id = cc.seller_id
@@ -241,7 +315,7 @@ export async function getCutTicketContent(tenantId: string, input: ReprintCutInp
   if (!cut) throw new HttpError('NOT_FOUND', 'Corte no encontrado')
 
   // Obtener items (ventas asociadas al corte)
-  const { rows: salesRows } = await db.query(`
+  const { rows: salesRows } = await db.query<CutSaleRow>(`
     SELECT s.id, s.folio_display, s.subtotal, s.total, s.status,
            sp.method, sp.amount, sp.change_amount
     FROM sales s
@@ -256,7 +330,7 @@ export async function getCutTicketContent(tenantId: string, input: ReprintCutInp
   const payments: Array<{ method: string; amount: number }> = []
 
   for (const s of salesRows) {
-    const { rows: itemRows } = await db.query(`
+    const { rows: itemRows } = await db.query<SaleItemRow>(`
       SELECT product_name, quantity, unit_price, subtotal
       FROM sale_items WHERE tenant_id = $1 AND sale_id = $2
       ORDER BY created_at ASC

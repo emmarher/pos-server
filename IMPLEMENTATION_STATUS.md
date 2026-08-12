@@ -139,6 +139,9 @@
 - [x] UDP broadcast en puerto 5000 (`POS_DISCOVER`) — servicio implementado
 - [x] Servidor responde con `{ip, port, tenant_id, device_name, api_version}` — servicio implementado
 - [x] Multi-tenant: tenant_id desde BD (query active tenant) — implementado
+- [x] **Conectado al servidor**: `startDiscovery()` se inicia al arrancar (server.ts) y se detiene en el apagado ordenado
+- [x] **Respuesta al broadcast corregida**: responde al puerto de origen del cliente (`rinfo.port`), no al 5000; `port` de la respuesta = 3000 (API)
+- [x] **Rutas `GET /discovery/status` y `GET /discovery/config`** registradas en app.ts
 - [x] Fallback: QR code pairing y IP manual — pendiente
 - [x] Device capabilities registry (`can_print`, `can_scale`, `api_version`) — pendiente
 
@@ -182,7 +185,8 @@
 
 ## Última Actualización
 - **Fecha**: 2026-08-12
-- **Commit**: `4c134cf` - feat: cashier module - TURN/DAILY cuts, withdrawals, reprint
+- **Commit**: (pendiente) — fix: compilación reparada (104→0 errores TS) + UDP Discovery conectado y probado
+- **Estado**: `tsc --noEmit` 0 errores, `eslint` 0 errores, servidor arranca y responde al broadcast `POS_DISCOVER`
 - **Próximo módulo**: Impresión delegada (print queue) — siguiente paso recomendado
 
 ---

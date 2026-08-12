@@ -36,6 +36,9 @@ import { authRoutes } from './modules/auth/auth.routes.js'
 import { inventoryRoutes } from './modules/inventory/inventory.routes.js'
 import { productsRoutes } from './modules/products/products.routes.js'
 import { salesRoutes } from './modules/sales/sales.routes.js'
+import { cashierRoutes } from './modules/cashier/cashier.routes.js'
+import { customersRoutes } from './modules/customers/customers.routes.js'
+import { registerDiscoveryRoutes } from './services/udp-discovery.js'
 import { HttpError } from './types/errors.js'
 import {
   errorEnvelope,
@@ -135,6 +138,10 @@ export function buildApp(): FastifyInstance {
   void app.register(salesRoutes)
   void app.register(inventoryRoutes)
   void app.register(cashierRoutes)
+  void app.register(customersRoutes)
+
+  /* Rutas de utilidad del descubrimiento UDP (status/config) */
+  void app.register(registerDiscoveryRoutes)
 
   /* Rutas no encontradas → envoltorio estándar con data: [] (404) */
   app.setNotFoundHandler((_req, reply) => {

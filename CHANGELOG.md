@@ -4,6 +4,48 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.7.1] — 2026-08-12 — Compilación reparada + UDP Discovery conectado (RF-DS)
+
+### Añadido
+
+- **UDP Discovery conectado al servidor** (RF-DS-001): `server.ts` inicia
+  `startDiscovery()` al arrancar (puerto 5000) y lo detiene en el apagado
+  ordenado. `app.ts` registra las rutas `GET /discovery/status` y
+  `GET /discovery/config` como plugin tipado.
+- **Respuesta al broadcast corregida**: el servidor responde `POS_DISCOVER`
+  al **puerto de origen** del cliente (`rinfo.port`) — antes enviaba al puerto
+  5000 y el cliente nunca recibía la respuesta. El campo `port` de la respuesta
+  ahora es el puerto del API (3000), como espera la tablet según el PRD.
+- **Módulo de clientes registrado**: `customersRoutes` se registra en `app.ts`
+  (estaba implementado pero nunca conectado → las rutas `/customers*` daban 404).
+- **Paginación real en `GET /customers`**: `limit`/`offset` se calculaban pero
+  nunca se aplicaban a la query; ahora usan `LIMIT $n OFFSET $n` con placeholders
+  correctos (el COUNT no recibe parámetros extra).
+
+### Corregido
+
+- **`app.ts` compilaba con `cashierRoutes` sin importar** (TS2304) — import y
+  registro agregados. El proyecto pasó de 104 errores de TypeScript a 0.
+- **`customers.service.ts`**: tipos faltantes (`CustomerInput`,
+  `CustomerCreditAdjustment`, `CustomerCreditResponse`, `CustomerPaymentPayload`)
+  añadidos a `types/customers.ts`; queries de BD tipadas; `await` faltante en
+  INSERT/UPDATE de crédito; bug de placeholders en `UPDATE customers`
+  (`email = $5` escribía el teléfono); sintaxis `);` → `};` en el return de
+  `makeCreditAdjustment`.
+- **`cashier.service.ts`**: queries tipadas (`CashierCutRow`, `SalePaymentRow`,
+  etc.); bug de runtime: el return de `endCut` usaba `card_amount`/`transfer_amount`/
+  `credit_amount` (undefined) en vez de las variables reales; `total_sales` ahora
+  recibe la suma de efectivo en lugar del contador de transacciones; `user_id`
+  sin usar eliminado.
+- **`cashier.routes.ts`**: `request.user.name` no existe en el JWT (el payload
+  real es `role_name`) — se quitó de las firmas; `request.params` tipado con
+  `ParamsWithId`; `ReprintTicketInput` → `ReprintCutInput`.
+- **Schemas de params**: `{ id: {...} }` plano rompía el arranque de Fastify
+  (`keyword "id" not supported`) en 4 rutas de `/customers/:id` — ahora usan
+  `type: 'object'` + `properties`.
+- **Lint limpio**: 27 errores resueltos (unused vars, `any`, async executor de
+  Promise, handlers async sin await, assertion innecesaria).
+
 ## [0.7.0] — 2026-08-12 — Corte de caja (RF-CC)
 
 ### Añadido

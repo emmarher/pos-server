@@ -14,6 +14,7 @@
  * ────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { AuthJwtPayload } from '../../types/auth.js'
 import { authenticate, requirePermission } from '../../middleware/auth.js'
 import { okEnvelope, okEnvelopeSchema } from '../../types/response.js'
 import {
@@ -31,15 +32,17 @@ import {
   getCustomer,
   createCustomer,
   updateCustomer,
-  checkCredit,
   makeCreditAdjustment,
   makeCreditPayment,
 } from './customers.service.js'
+import type {
+  CustomerInput,
+  CustomerCreditAdjustment,
+  CustomerPaymentPayload,
+} from '../../types/customers.js'
 
 /** Auth JWT: todo handler lee el tenant desde aquí. */
-type AuthedRequest = FastifyRequest & {
-  user: { tenant_id: string; sub: string }
-}
+type AuthedRequest = FastifyRequest & { user: AuthJwtPayload }
 
 /** Plugin Fastify que registra las rutas de clientes. */
 export function customersRoutes(app: FastifyInstance): void {
@@ -95,7 +98,11 @@ export function customersRoutes(app: FastifyInstance): void {
     {
       preHandler: [authenticate, requirePermission('customers:read')],
       schema: {
-        params: { id: { type: 'string', minLength: 1 } },
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', minLength: 1 } },
+        },
         response: { 200: okEnvelopeSchema(customerSchema) },
       },
     },
@@ -112,7 +119,11 @@ export function customersRoutes(app: FastifyInstance): void {
     {
       preHandler: [authenticate, requirePermission('customers:manage')],
       schema: {
-        params: { id: { type: 'string', minLength: 1 } },
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', minLength: 1 } },
+        },
         body: customerUpdateBodySchema,
         response: { 200: okEnvelopeSchema(customerSchema) },
       },
@@ -134,16 +145,24 @@ export function customersRoutes(app: FastifyInstance): void {
     {
       preHandler: [authenticate, requirePermission('customers:manage')],
       schema: {
-        params: { id: { type: 'string', minLength: 1 } },
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', minLength: 1 } },
+        },
         body: creditAdjustmentBodySchema,
         response: { 200: okEnvelopeSchema(customerCreditResponseSchema) },
       },
     },
     async (request: AuthedRequest) => {
-      const { id } = request.params as { id: string }
+      const body = request.body as CustomerCreditAdjustment
       const result = await makeCreditAdjustment(
-        { tenant_id: request.user.tenant_id, user_id: request.user.sub },
-        request.body as CustomerCreditAdjustment,
+        {
+          tenant_id: request.user.tenant_id,
+          user_id: request.user.sub,
+          customer_id: body.customer_id,
+        },
+        body,
       )
       return okEnvelope(result, 'Ajuste de crédito registrado', 200)
     },
@@ -155,16 +174,24 @@ export function customersRoutes(app: FastifyInstance): void {
     {
       preHandler: [authenticate, requirePermission('customers:manage')],
       schema: {
-        params: { id: { type: 'string', minLength: 1 } },
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', minLength: 1 } },
+        },
         body: creditPaymentBodySchema,
         response: { 200: okEnvelopeSchema(customerCreditResponseSchema) },
       },
     },
     async (request: AuthedRequest) => {
-      const { id } = request.params as { id: string }
+      const body = request.body as CustomerPaymentPayload
       const result = await makeCreditPayment(
-        { tenant_id: request.user.tenant_id, user_id: request.user.sub },
-        request.body as CustomerPaymentPayload,
+        {
+          tenant_id: request.user.tenant_id,
+          user_id: request.user.sub,
+          customer_id: body.customer_id,
+        },
+        body,
       )
       return okEnvelope(result, 'Pago a crédito registrado', 200)
     },
