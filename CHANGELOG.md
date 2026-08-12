@@ -4,6 +4,22 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.7.0] — 2026-08-12 — Corte de caja (RF-CC)
+
+### Añadido
+
+- **`POST /cashier/turn-start`** — inicia un corte de turno (status OPEN) para el vendedor autenticado (permiso `cashier:cut_own`).
+- **`POST /cashier/turn-end/:id`** — finaliza el corte: calcula totales por método (CASH/CARD/TRANSFER/CREDIT), compara efectivo contado vs esperado, calcula diferencia (faltante/sobrante), status CLOSED y congela ventas en `cashier_cut_sales` (permiso `cashier:cut_own`).
+- **`POST /cashier/daily-start`** — inicia un corte diario (status OPEN) para administrador global (permiso `cashier:cut_all`).
+- **`POST /cashier/daily-end/:id`** — finaliza el corte diario: incluye todas las ventas de todos los vendedores, mismo desglose que turn-end (permiso `cashier:cut_all`).
+- **`POST /cashier/withdrawal/:id`** — registra un retiro de caja: verifica que el corte esté CLOSED, descuenta del `counted_cash`, registra en `cashier_withdrawals` (permiso `cashier:cut_all`).
+- **`POST /cashier/reprint-ticket`** — obtiene el contenido formateado para reimpresión de un corte (resumen + items + pagos) (permiso `cashier:cut_all`).
+
+### Corregido
+
+- Lógica de cálculo de diferencia (faltante/sobrante) consistente entre `endCut` y `createWithdrawal`.
+- Permisos correctamente asociados a roles: `cashier:cut_own` (solo vendedor propio) y `cashier:cut_all` (admin global).
+
 ## [0.5.0] — 2026-08-11 — Cancelación de ventas (RF-VE-006)
 
 ### Añadido
