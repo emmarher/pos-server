@@ -134,6 +134,7 @@ export function buildApp(): FastifyInstance {
   void app.register(productsRoutes)
   void app.register(salesRoutes)
   void app.register(inventoryRoutes)
+  void app.register(cashierRoutes)
 
   /* Rutas no encontradas → envoltorio estándar con data: [] (404) */
   app.setNotFoundHandler((_req, reply) => {
