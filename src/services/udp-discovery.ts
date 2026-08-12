@@ -9,6 +9,7 @@
  */
 
 import * as dgram from "dgram";
+import { db } from "../database/client.js";
 
 // Configuración del descubrimiento
 const DISCOVER_PORT = 5000;
@@ -27,6 +28,48 @@ export interface DiscoveryResponse {
 let discoverSocket: dgram.Socket | null = null;
 let isRunning = false;
 
+// Cache del tenant activo (se obtiene al iniciar el servicio)
+let activeTenantId: string | null = null;
+let activeTenantName: string | null = null;
+
+/**
+ * Obtiene el tenant_id del tenant activo desde la base de datos
+ * Para un servidor POS single-tenant, retorna el primer tenant activo
+ */
+async function fetchActiveTenant(): Promise<{ id: string; name: string } | null> {
+  try {
+    const result = await db.query<{ id: string; name: string }>(
+      "SELECT id, name FROM tenants WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1"
+    );
+    if (result.rows.length > 0) {
+      const tenant = result.rows[0];
+      return { id: tenant.id, name: tenant.name };
+    }
+    console.warn("⚠️ No active tenant found in database");
+    return null;
+  } catch (err) {
+    console.error("❌ Error fetching active tenant:", err);
+    return null;
+  }
+}
+
+/**
+ * Inicializa el tenant activo (se llama al iniciar el servicio)
+ */
+async function initializeTenant(): Promise<void> {
+  const tenant = await fetchActiveTenant();
+  if (tenant) {
+    activeTenantId = tenant.id;
+    activeTenantName = tenant.name;
+    console.log(`🏢 Active tenant for discovery: ${tenant.name} (${tenant.id})`);
+  } else {
+    // Fallback para desarrollo si no hay tenant en BD
+    activeTenantId = "DEMO-0001";
+    activeTenantName = "Demo Tenant";
+    console.warn("⚠️ Using fallback tenant for discovery");
+  }
+}
+
 /**
  * Inicia el servicio de descubrimiento UDP
  */
@@ -36,8 +79,11 @@ export function startDiscovery(): Promise<void> {
     return Promise.resolve();
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     try {
+      // Primero obtener el tenant activo
+      await initializeTenant();
+
       // Crear socket UDP
       discoverSocket = dgram.createSocket("udp4");
 
@@ -45,14 +91,15 @@ export function startDiscovery(): Promise<void> {
       discoverSocket.on("message", (msg: Buffer, rinfo: dgram.RemoteInfo) => {
         if (msg.toString().trim() === DISCOVER_MESSAGE) {
           try {
-            // Obtener tenant_id (usar placeholder para desarrollo)
-            const tenantId = getCurrentTenantId();
+            // Obtener tenant_id del tenant activo
+            const tenantId = activeTenantId ?? "DEMO-0001";
+            const deviceName = activeTenantName ? `POS-Server-${activeTenantName}` : `POS-Server-${tenantId}`;
 
             const response: DiscoveryResponse = {
               ip: rinfo.address,
               port: rinfo.port,
               tenant_id: tenantId,
-              device_name: `POS-Server-${tenantId}`,
+              device_name: deviceName,
               api_version: "4.0.0",
             };
 
@@ -60,7 +107,7 @@ export function startDiscovery(): Promise<void> {
             const responseBuf = Buffer.from(JSON.stringify(response));
             discoverSocket.send(responseBuf, 0, responseBuf.length, DISCOVER_PORT, rinfo.address);
 
-            console.log(`📡 Discovery response sent to ${rinfo.address}:${rinfo.port}`);
+            console.log(`📡 Discovery response sent to ${rinfo.address}:${rinfo.port} for tenant ${tenantId}`);
           } catch (err) {
             console.error("❌ Error generating discovery response:", err);
           }
@@ -102,12 +149,17 @@ export function stopDiscovery(): Promise<void> {
 }
 
 /**
- * Obtiene el tenant_id actual (placeholder para desarrollo)
+ * Obtiene el tenant_id actual (del cache inicializado al inicio)
  */
-function getCurrentTenantId(): string {
-  // En producción, esto debería venir del contexto de multi-tenant
-  // Por ahora retornamos el tenant de demo por defecto
-  return "DEMO-0001";
+export function getCurrentTenantId(): string {
+  return activeTenantId ?? "DEMO-0001";
+}
+
+/**
+ * Obtiene el nombre del tenant activo
+ */
+export function getCurrentTenantName(): string {
+  return activeTenantName ?? "Demo Tenant";
 }
 
 /**
@@ -121,6 +173,8 @@ export function registerDiscoveryRoutes(fastify: any, options: any): void {
       isRunning,
       port: DISCOVER_PORT,
       message: DISCOVER_MESSAGE,
+      tenant_id: getCurrentTenantId(),
+      tenant_name: getCurrentTenantName(),
     };
   });
 
@@ -129,6 +183,8 @@ export function registerDiscoveryRoutes(fastify: any, options: any): void {
     return {
       udpPort: DISCOVER_PORT,
       discoverMessage: DISCOVER_MESSAGE,
+      tenant_id: getCurrentTenantId(),
+      tenant_name: getCurrentTenantName(),
       fallback: {
         qrCode: generateDiscoveryQR(),
         manualInput: {
@@ -147,7 +203,8 @@ export function registerDiscoveryRoutes(fastify: any, options: any): void {
 function generateDiscoveryQR(): string {
   return JSON.stringify({
     type: "discovery",
-    tenantId: "DEMO-0001",
+    tenantId: getCurrentTenantId(),
+    tenantName: getCurrentTenantName(),
     connection: {
       protocol: "http",
       host: "localhost",
@@ -160,6 +217,8 @@ export default {
   startDiscovery,
   stopDiscovery,
   registerDiscoveryRoutes,
+  getCurrentTenantId,
+  getCurrentTenantName,
 };
 
 /**

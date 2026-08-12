@@ -260,7 +260,7 @@ export async function makeCreditAdjustment(
     new_balance: newBalance,
     exceeded_limit: false,
     message: input.amount > 0 ? 'Cargo registrado correctamente' : 'Abono registrado correctamente',
-  );
+  };
 }
 
 /** Realiza un pago a crédito (RF-VE-005). */

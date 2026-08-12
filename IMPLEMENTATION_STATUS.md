@@ -138,7 +138,8 @@
 ### 📋 Descubrimiento UDP (RF-DS)
 - [x] UDP broadcast en puerto 5000 (`POS_DISCOVER`) — servicio implementado
 - [x] Servidor responde con `{ip, port, tenant_id, device_name, api_version}` — servicio implementado
-- [x] Fallback: QR code pairing y IP manual — pendiente (ver tarea 5)
+- [x] Multi-tenant: tenant_id desde BD (query active tenant) — implementado
+- [x] Fallback: QR code pairing y IP manual — pendiente
 - [x] Device capabilities registry (`can_print`, `can_scale`, `api_version`) — pendiente
 
 ### 📋 Reportes Adicionales
