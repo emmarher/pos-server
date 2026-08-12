@@ -136,9 +136,10 @@
 - [ ] Orden procesamiento: categories → products → prices → inventory → discounts → customers → sales
 
 ### 📋 Descubrimiento UDP (RF-DS)
-- [ ] UDP broadcast en puerto 5000 (`POS_DISCOVER`)
-- [ ] Servidor responde con `{ip, port, tenant_id, device_name, api_version}`
-- [ ] Fallback: QR code pairing y IP manual
+- [x] UDP broadcast en puerto 5000 (`POS_DISCOVER`) — servicio implementado
+- [x] Servidor responde con `{ip, port, tenant_id, device_name, api_version}` — servicio implementado
+- [x] Fallback: QR code pairing y IP manual — pendiente (ver tarea 5)
+- [x] Device capabilities registry (`can_print`, `can_scale`, `api_version`) — pendiente
 
 ### 📋 Reportes Adicionales
 - [ ] Ya parcialmente cubierto en Fase 2
