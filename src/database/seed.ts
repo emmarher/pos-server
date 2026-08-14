@@ -89,7 +89,7 @@ export async function seedDemo(): Promise<void> {
       ],
     )
 
-    /* 2) price_types por tenant (Público default + Mayoreo) */
+    /* 2) price_types por tenant (Público default + Mayoreo + Especial) */
     await tx.query(
       `INSERT INTO price_types (tenant_id, name, code, is_default, is_active, created_at, updated_at)
        VALUES ($1, 'Público', 'RETAIL', 1, 1, $2, $2)`,
@@ -98,6 +98,11 @@ export async function seedDemo(): Promise<void> {
     await tx.query(
       `INSERT INTO price_types (tenant_id, name, code, is_default, is_active, created_at, updated_at)
        VALUES ($1, 'Mayoreo', 'WHOLESALE', 0, 1, $2, $2)`,
+      [tenantId, nowIso],
+    )
+    await tx.query(
+      `INSERT INTO price_types (tenant_id, name, code, is_default, is_active, created_at, updated_at)
+       VALUES ($1, 'Especial', 'SPECIAL', 0, 1, $2, $2)`,
       [tenantId, nowIso],
     )
 
