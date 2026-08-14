@@ -491,17 +491,54 @@ export async function searchProducts(
   return { items, total }
 }
 
-/** Carga los precios vigentes de un producto (RF-CA-004). */
+/**
+ * Carga los precios vigentes de un producto (RF-CA-004).
+ * Devuelve UN precio por cada tipo de precio activo del tenant:
+ *   - Si el producto tiene `product_prices` para ese tipo → el específico.
+ *   - Si no → el precio base del producto (`products.price`) como fallback.
+ * Así la terminal SIEMPRE muestra todos los tipos de precio disponibles
+ * (Público, Mayoreo…) aunque el producto no tenga precios registrados.
+ */
 async function loadPrices(tenantId: string, productId: string): Promise<ProductPrice[]> {
-  const { rows } = await db.query<ProductPrice>(
-    `SELECT id, product_id, price_type_id, price, min_quantity, start_date, end_date
-     FROM product_prices
-     WHERE tenant_id = $1 AND product_id = $2 AND is_active = 1
-       AND (end_date IS NULL OR end_date >= date('now'))
-     ORDER BY start_date DESC`,
-    [tenantId, productId],
-  )
-  return rows
+  const [priceTypesRes, { rows: productPrices }, { rows: product }] = await Promise.all([
+    db.query<PriceTypeRow>(
+      'SELECT id, tenant_id, name, code, is_default, is_active FROM price_types WHERE tenant_id = $1 AND is_active = 1 ORDER BY is_default DESC, name ASC',
+      [tenantId],
+    ),
+    db.query<ProductPrice>(
+      `SELECT id, product_id, price_type_id, price, min_quantity, start_date, end_date
+       FROM product_prices
+       WHERE tenant_id = $1 AND product_id = $2 AND is_active = 1
+         AND (end_date IS NULL OR end_date >= date('now'))
+       ORDER BY start_date DESC`,
+      [tenantId, productId],
+    ),
+    db.query<{ price: number }>('SELECT price FROM products WHERE tenant_id = $1 AND id = $2', [
+      tenantId,
+      productId,
+    ]),
+  ])
+
+  const basePrice = product[0]?.price ?? 0
+  const priceTypes = priceTypesRes.rows
+  const byType = new Map(productPrices.map(pp => [pp.price_type_id, pp]))
+
+  // Un precio por cada tipo activo; fallback al precio base del producto
+  return priceTypes.map(pt => {
+    const existing = byType.get(pt.id)
+    if (existing) {
+      return existing
+    }
+    return {
+      id: `${productId}-${pt.id}`,
+      product_id: productId,
+      price_type_id: pt.id,
+      price: basePrice,
+      min_quantity: 1,
+      start_date: new Date().toISOString().slice(0, 10),
+      end_date: null,
+    }
+  })
 }
 
 /** GET /products/:id — detalle completo con precios. */

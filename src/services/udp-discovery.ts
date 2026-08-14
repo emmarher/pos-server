@@ -9,6 +9,7 @@
  */
 
 import * as dgram from 'dgram'
+import * as os from 'node:os'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../database/client.js'
 
@@ -32,9 +33,32 @@ export interface DiscoveryResponse {
 let discoverSocket: dgram.Socket | null = null;
 let isRunning = false;
 
+// IP del servidor en la LAN (se detecta al iniciar; usada en la respuesta)
+let serverIp: string = '127.0.0.1';
+
 // Cache del tenant activo (se obtiene al iniciar el servicio)
 let activeTenantId: string | null = null;
 let activeTenantName: string | null = null;
+
+/**
+ * Detecta la IP local del servidor en la LAN (la primera interfaz IPv4
+ * no-loopback). Es la IP que la tablet guardará para conectarse por HTTP.
+ */
+function detectServerIp(): string {
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      for (const net of interfaces[name] ?? []) {
+        if (net.family === 'IPv4' && !net.internal) {
+          return net.address;
+        }
+      }
+    }
+  } catch {
+    /* sin red local → loopback */
+  }
+  return '127.0.0.1';
+}
 
 /**
  * Obtiene el tenant_id del tenant activo desde la base de datos
@@ -86,6 +110,9 @@ export async function startDiscovery(): Promise<void> {
   // Primero obtener el tenant activo
   await initializeTenant();
 
+  // Detectar la IP del servidor en la LAN para la respuesta
+  serverIp = detectServerIp();
+
   // Crear socket UDP
   const socket = dgram.createSocket("udp4");
   discoverSocket = socket;
@@ -99,7 +126,7 @@ export async function startDiscovery(): Promise<void> {
         const deviceName = activeTenantName ? `POS-Server-${activeTenantName}` : `POS-Server-${tenantId}`;
 
         const response: DiscoveryResponse = {
-          ip: rinfo.address,
+          ip: serverIp,
           port: API_PORT,
           tenant_id: tenantId,
           device_name: deviceName,
