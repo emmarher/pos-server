@@ -48,7 +48,7 @@ cp .env.example .env      # luego edita JWT_SECRET (obligatorio) y DB_PROVIDER
 | `JWT_SECRET` | — | **Obligatorio.** Firma de access (24h) + refresh (30d) |
 | `JWT_EXPIRES_IN` | `86400` | Vigencia del access token en segundos (24h) |
 | `JWT_REFRESH_EXPIRES_IN` | `2592000` | Vigencia del refresh token en segundos (30d) |
-| `DEVICE_LIMIT_DEFAULT` | `2` | Máximo de dispositivos por tenant (RF-AU-004) |
+| `DEVICE_LIMIT_DEFAULT` | `3` | Máximo de dispositivos por tenant (RF-AU-004) |
 | `LOG_LEVEL` | `info` | Nivel de log de Fastify/pino |
 
 ---
@@ -201,7 +201,7 @@ Valida licencia activa (`LICENSE_EXPIRED` → 403), límite de dispositivos
     "user": { "id": "...", "tenant_id": "...", "name": "Administrador", "role_name": "Administrador", "permissions": ["products:read", "..."] },
     "tenant": { "id": "...", "tenant_id": "...", "business_name": "Tenant Demo", "address": null, "phone": "555-1234", "receipt_footer": null },
     "device": { "device_id": "tablet-caja-01", "tenant_id": "...", "device_name": "Tablet Caja 1", "device_type": "android", "can_print": false, "can_scale": false },
-    "license": { "status": "active", "expires_at": "...", "max_devices": 2 }
+    "license": { "status": "active", "expires_at": "...", "max_devices": 3 }
   }
 }
 ```
@@ -319,7 +319,7 @@ Devuelve el mismo contrato de `data` con tokens renovados.
 | Código de tenant (`tenant_code`) | `DEMO-0001` |
 | Usuario **Administrador** | PIN `1234` |
 | Usuario **Vendedor** | PIN `5678` |
-| Límite de dispositivos | 2 |
+| Límite de dispositivos | 3 |
 | Tipos de precio | Público (default), Mayoreo |
 | Permisos | 25 códigos del PRD (mapa en IMPLEMENTATION_STATUS.md) |
 

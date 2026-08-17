@@ -67,7 +67,7 @@ export async function seedDemo(): Promise<void> {
     await tx.query(
       `INSERT INTO tenants (name, license_key, license_expires_at, max_devices, max_branches, is_active, created_at, updated_at)
        VALUES ($1, $2, $3, $4, 1, 1, $5, $5)`,
-      ['Tenant Demo', DEMO_TENANT_CODE, expiresAt, 2, nowIso],
+      ['Tenant Demo', DEMO_TENANT_CODE, expiresAt, 3, nowIso],
     )
     const tenantRows = await tx.query<{ id: string }>(
       'SELECT id FROM tenants WHERE license_key = $1',
