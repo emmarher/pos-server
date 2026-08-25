@@ -1,0 +1,12 @@
+-- 005_product_image.sqlite.sql — Columna de imagen para productos.
+--
+-- ────────────────────────────────────────────────────────────────────────
+-- Almacena la RUTA RELATIVA de la imagen servida por el proxy Fastify:
+--   /images/{tenant_id}/prod_{uuid}.webp
+-- La tablet resuelve esta ruta contra la URL base del servidor POS
+-- (la misma IP:3000 que ya usa para todo el API). El objeto real vive en
+-- Garage (S3) bajo el key `{tenant_id}/prod_{uuid}.webp`.
+--
+-- Nullable: los productos existentes quedan intactos (sin imagen).
+-- ────────────────────────────────────────────────────────────────────────
+ALTER TABLE products ADD COLUMN imagen_url TEXT;
