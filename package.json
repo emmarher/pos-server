@@ -15,7 +15,8 @@
     "lint": "eslint . --ext .ts",
     "migrate": "tsx src/database/migrate.ts",
     "seed": "tsx src/database/seed.ts",
-    "seed:catalog": "tsx src/database/seed-catalog.ts"
+    "seed:catalog": "tsx src/database/seed-catalog.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.967.0",
@@ -39,6 +40,7 @@
     "eslint": "^8.57.0",
     "prettier": "^3.3.0",
     "tsx": "^4.16.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^3.2.7"
   }
 }

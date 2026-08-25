@@ -12,7 +12,7 @@ module.exports = {
   parser: '@typescript-eslint/parser',
   parserOptions: {
     tsconfigRootDir: __dirname,
-    project: ['./tsconfig.json'],
+    project: ['./tsconfig.json', './tsconfig.test.json'],
   },
   plugins: ['@typescript-eslint'],
   extends: [
@@ -25,4 +25,19 @@ module.exports = {
     es2022: true,
   },
   ignorePatterns: ['dist/', 'node_modules/'],
+  overrides: [
+    {
+      /* Tests: relajar reglas de tipado estricto (respuestas any de
+         inject, mocks asíncronos triviales, referencia types vitest). */
+      files: ['tests/**/*.ts', 'vitest.config.ts'],
+      rules: {
+        '@typescript-eslint/no-unsafe-assignment': 'off',
+        '@typescript-eslint/no-unsafe-member-access': 'off',
+        '@typescript-eslint/no-unsafe-call': 'off',
+        '@typescript-eslint/no-unsafe-return': 'off',
+        '@typescript-eslint/require-await': 'off',
+        '@typescript-eslint/triple-slash-reference': 'off',
+      },
+    },
+  ],
 };
