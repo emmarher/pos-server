@@ -19,7 +19,7 @@
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { db } from '../src/database/client.js'
 import { uploadProductImage } from '../src/services/storage.service.js'
 
@@ -37,7 +37,7 @@ interface ProductDef {
 }
 
 /** Prefijos de internal_code por categoría (ej. FRY0001). */
-const CATEGORY_PREFIX: Record<string, string> = {
+export const CATEGORY_PREFIX: Record<string, string> = {
   'Frutas y Verduras': 'FRV',
   Lácteos: 'LAC',
   'Salsas y Condimentos': 'SAC',
@@ -47,7 +47,7 @@ const CATEGORY_PREFIX: Record<string, string> = {
   'Limpieza': 'LIM',
 }
 
-const PRODUCTS: ProductDef[] = [
+export const PRODUCTS: ProductDef[] = [
   /* ── Frutas y Verduras (KG, báscula) ── */
   { name: 'Cebolla', category: 'Frutas y Verduras', unit: 'kg', price: 32.0, cost: 24.0, image: 'cebolla.webp' },
   { name: 'Cebolla morada', category: 'Frutas y Verduras', unit: 'kg', price: 38.0, cost: 29.0, image: 'cebolla morada.webp' },
@@ -314,8 +314,15 @@ async function main(): Promise<void> {
   await db.end()
 }
 
-main().catch(async (err) => {
-  console.error('Error:', err)
-  await db.end()
-  process.exit(1)
-})
+/* Ejecuta main() SOLO cuando el script corre directamente (no al ser
+   importado por otros scripts, p.ej. load-real-categories.ts). */
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+if (invokedDirectly) {
+  main().catch(async (err) => {
+    console.error('Error:', err)
+    await db.end()
+    process.exit(1)
+  })
+}
