@@ -48,6 +48,26 @@ export interface AppEnv {
   deviceLimitDefault: number
   /** Nivel de log de Fastify/pino */
   logLevel: string
+
+  /* ── Almacenamiento de imágenes (Garage, S3-compatible) ────────────── */
+
+  /**
+   * Habilita el módulo de imágenes. En false, los endpoints de upload
+   * responden 503 controlado (útil en dev/tests sin Garage corriendo).
+   */
+  imagesEnabled: boolean
+  /** Endpoint API del S3-compatible (ej. http://127.0.0.1:3900) */
+  s3Endpoint: string
+  /** Región del bucket (Garage suele usar 'garage') */
+  s3Region: string
+  s3AccessKeyId: string
+  s3SecretAccessKey: string
+  /** Nombre del bucket de imágenes */
+  s3Bucket: string
+  /** URL pública directa para leer objetos (ej. http://127.0.0.1:3901) */
+  s3PublicUrl: string
+  /** Tamaño máximo por imagen en MB (default 5) */
+  s3MaxFileSizeMb: number
 }
 
 /* ── 2) CARGA Y VALIDACIÓN ───────────────────────────────────────────── */
@@ -83,6 +103,54 @@ function loadEnv(): AppEnv {
     jwtRefreshExpiresIn: Number(process.env.JWT_REFRESH_EXPIRES_IN ?? 2592000),
     deviceLimitDefault: Number(process.env.DEVICE_LIMIT_DEFAULT ?? 2),
     logLevel: process.env.LOG_LEVEL ?? 'info',
+
+    // Imágenes: si IMAGES_ENABLED=true pero falta alguna credencial S3,
+    // se desactiva el módulo con warning en vez de tumbar el arranque
+    // (las imágenes son un extra: la venta nunca debe depender de Garage).
+    ...loadImagesEnv(),
+  }
+}
+
+/** Lee y normaliza la config del storage de imágenes (Garage/S3). */
+function loadImagesEnv(): Pick<
+  AppEnv,
+  | 'imagesEnabled'
+  | 's3Endpoint'
+  | 's3Region'
+  | 's3AccessKeyId'
+  | 's3SecretAccessKey'
+  | 's3Bucket'
+  | 's3PublicUrl'
+  | 's3MaxFileSizeMb'
+> {
+  const s3Endpoint = process.env.S3_ENDPOINT?.trim() ?? ''
+  const s3Region = process.env.S3_REGION?.trim() || 'garage'
+  const s3AccessKeyId = process.env.S3_ACCESS_KEY_ID?.trim() ?? ''
+  const s3SecretAccessKey = process.env.S3_SECRET_ACCESS_KEY?.trim() ?? ''
+  const s3Bucket = process.env.S3_BUCKET?.trim() ?? ''
+  const s3PublicUrl = (process.env.S3_PUBLIC_URL?.trim() ?? '').replace(/\/+$/, '')
+  const s3MaxFileSizeMb = Number(process.env.S3_MAX_FILE_SIZE_MB ?? 5)
+
+  const requested = (process.env.IMAGES_ENABLED ?? 'true').trim().toLowerCase()
+  const credentialsOk =
+    s3Endpoint !== '' && s3AccessKeyId !== '' && s3SecretAccessKey !== '' && s3Bucket !== ''
+
+  if (requested === 'true' && !credentialsOk) {
+    // No es fatal: el servidor arranca, solo las rutas de imagen dan 503.
+    console.warn(
+      '[env] IMAGES_ENABLED=true pero faltan variables S3_*; módulo de imágenes DESACTIVADO.',
+    )
+  }
+
+  return {
+    imagesEnabled: requested === 'true' && credentialsOk,
+    s3Endpoint,
+    s3Region,
+    s3AccessKeyId,
+    s3SecretAccessKey,
+    s3Bucket,
+    s3PublicUrl,
+    s3MaxFileSizeMb: Number.isFinite(s3MaxFileSizeMb) && s3MaxFileSizeMb > 0 ? s3MaxFileSizeMb : 5,
   }
 }
 
