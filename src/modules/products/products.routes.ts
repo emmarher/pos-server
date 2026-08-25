@@ -7,7 +7,12 @@
  *   POST   /products             crear producto (products:create)
  *   GET    /products/:id         detalle con precios (products:read)
  *   PATCH  /products/:id         actualizar (products:update)
+ *   DELETE /products/:id         desactivar (products:delete)
  *   GET    /products/:id/prices  precios por tipo de precio (products:read)
+ *   POST   /products/:id/image   subir imagen (products:update)
+ *   DELETE /products/:id/image   quitar imagen (products:update)
+ *   GET    /images/:t/:f         proxy de lectura hacia Garage (sin auth:
+ *                                los <Image> de RN no pueden mandar headers)
  *   GET    /categories           listar categorías (categories:read)
  *   POST   /categories           crear categoría (categories:manage)
  *   PATCH  /categories/:id       actualizar categoría (categories:manage)
@@ -19,8 +24,17 @@
  * ────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import multipart from '@fastify/multipart'
 import { authenticate, requirePermission } from '../../middleware/auth.js'
-import { okEnvelope, okEnvelopeSchema } from '../../types/response.js'
+import { env } from '../../config/env.js'
+import { okEnvelope, okEnvelopeSchema, errorEnvelope } from '../../types/response.js'
+import {
+  deleteImage,
+  getImageStream,
+  keyFromUrl,
+  uploadProductImage,
+} from '../../services/storage.service.js'
+import { HttpError } from '../../types/errors.js'
 import {
   categoryCreateBodySchema,
   categorySchema,
@@ -40,11 +54,13 @@ import {
   createProduct,
   deactivateProduct,
   getProduct,
+  getProductImageState,
   getProductPrices,
   listCategories,
   listMeasurementUnits,
   listPriceTypes,
   searchProducts,
+  setProductImageUrl,
   updateCategory,
   updateProduct,
   type CategoryInput,
@@ -54,8 +70,41 @@ import {
 /** Auth JWT: todo handler lee el tenant desde aquí. */
 type AuthedRequest = FastifyRequest & { user: { tenant_id: string } }
 
-/** Plugin Fastify que registra las rutas del catálogo. */
+/* ── Imágenes (proxy Garage S3) ──────────────────────────────────────── */
+
+/** MIME types aceptados para la imagen de producto. */
+const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp'])
+
+/**
+ * Key válida en el bucket: `{tenant}/prod_{uuid}.webp`.
+ * Acepta tenant_id con o sin guiones (pg usa UUID con guiones; sqlite
+ * puede guardarlos sin guiones) y uuid de archivo SIEMPRE con guiones
+ * (lo genera crypto.randomUUID()).
+ * El proxy SOLO sirve keys que cumplen esto (nada más del bucket es
+ * alcanzable desde fuera).
+ */
+const TENANT_ID = String.raw`(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`
+const FILE_UUID = String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
+const IMAGE_KEY_RE = new RegExp(`^${TENANT_ID}/prod_${FILE_UUID}\\.webp$`)
+
+/** `data` de la respuesta de subir/quitar imagen. */
+const productImageStateSchema = {
+  type: 'object',
+  required: ['imagen_url'],
+  additionalProperties: false,
+  properties: { imagen_url: { type: ['string', 'null'] } },
+}
+
+/**
+ * Plugin Fastify que registra las rutas del catálogo.
+ * Registra @fastify/multipart dentro de este contexto de encapsulamiento
+ * (solo las rutas de imagen lo necesitan; así no se toca app.ts global).
+ */
 export function productsRoutes(app: FastifyInstance): void {
+  /* Multipart solo en este scope: subida de imágenes (límite desde env) */
+  app.register(multipart, {
+    limits: { fileSize: env.s3MaxFileSizeMb * 1024 * 1024 },
+  })
   /* ── GET /products (RF-CA-006: búsqueda, limit 20) ─────────────────── */
   app.get(
     '/products',
@@ -273,4 +322,134 @@ export function productsRoutes(app: FastifyInstance): void {
       return okEnvelope(types, 'Tipos de precio', 200)
     },
   )
+
+  /* ── POST /products/:id/image (subir/reemplazar imagen) ─────────────── */
+  app.post(
+    '/products/:id/image',
+    {
+      preHandler: [authenticate, requirePermission('products:update')],
+      schema: {
+        params: idParamsSchema,
+        response: { 200: okEnvelopeSchema(productImageStateSchema) },
+      },
+    },
+    async (request: AuthedRequest, reply) => {
+      if (!env.imagesEnabled) {
+        return reply
+          .code(503)
+          .send(errorEnvelope('Almacenamiento de imágenes no disponible', 503))
+      }
+
+      const tenantId = request.user.tenant_id
+      const { id } = request.params as { id: string }
+
+      // Aislamiento multi-tenant: producto ajeno → NOT_FOUND (lanza)
+      const current = await getProductImageState(tenantId, id)
+
+      let data
+      try {
+        data = await request.file()
+      } catch {
+        // FST_INVALID_MULTIPART_CONTENT_TYPE: llegó JSON u otro content-type
+        throw new HttpError(
+          'VALIDATION_ERROR',
+          'La imagen debe enviarse como multipart/form-data',
+        )
+      }
+      if (!data) {
+        throw new HttpError('VALIDATION_ERROR', 'No se envió ninguna imagen')
+      }
+      if (!ALLOWED_IMAGE_MIME.has(data.mimetype)) {
+        throw new HttpError(
+          'VALIDATION_ERROR',
+          'Formato no permitido. Usa JPEG, PNG o WebP',
+        )
+      }
+
+      let buffer: Buffer
+      try {
+        buffer = await data.toBuffer()
+      } catch {
+        // El límite de @fastify/multipart rechaza el stream al excederlo
+        return reply.code(413).send(
+          errorEnvelope(
+            `La imagen supera el máximo de ${env.s3MaxFileSizeMb} MB`,
+            413,
+          ),
+        )
+      }
+
+      // Sube el objeto NUEVO primero; la BD se actualiza solo si S3 OK.
+      // La anterior se borra al final (BD ya consistente).
+      const uploaded = await uploadProductImage(tenantId, buffer)
+      await setProductImageUrl(tenantId, id, uploaded.url)
+
+      const oldKey = keyFromUrl(current.imagen_url, tenantId)
+      if (oldKey && oldKey !== uploaded.key) {
+        await deleteImage(oldKey)
+      }
+
+      return okEnvelope({ imagen_url: uploaded.url }, 'Imagen guardada', 200)
+    },
+  )
+
+  /* ── DELETE /products/:id/image (quitar imagen) ─────────────────────── */
+  app.delete(
+    '/products/:id/image',
+    {
+      preHandler: [authenticate, requirePermission('products:update')],
+      schema: {
+        params: idParamsSchema,
+        response: { 200: okEnvelopeSchema(productImageStateSchema) },
+      },
+    },
+    async (request: AuthedRequest, reply) => {
+      if (!env.imagesEnabled) {
+        return reply
+          .code(503)
+          .send(errorEnvelope('Almacenamiento de imágenes no disponible', 503))
+      }
+
+      const tenantId = request.user.tenant_id
+      const { id } = request.params as { id: string }
+
+      const current = await getProductImageState(tenantId, id)
+      await setProductImageUrl(tenantId, id, null)
+
+      const oldKey = keyFromUrl(current.imagen_url, tenantId)
+      if (oldKey) await deleteImage(oldKey)
+
+      return okEnvelope({ imagen_url: null }, 'Imagen eliminada', 200)
+    },
+  )
+
+  /* ── GET /images/:tenantId/:fileName (proxy de lectura Garage) ──────── */
+  app.get('/images/:tenantId/:fileName', async (request, reply) => {
+    if (!env.imagesEnabled) {
+      return reply.code(503).send(errorEnvelope('Imágenes no disponibles', 503))
+    }
+
+    const { tenantId, fileName } = request.params as {
+      tenantId: string
+      fileName: string
+    }
+
+    // Solo keys de imagen de producto válidas; cualquier otra cosa → 404
+    const key = `${tenantId}/${fileName}`
+    if (!IMAGE_KEY_RE.test(key)) {
+      return reply.code(404).send(errorEnvelope('Imagen no encontrada', 404))
+    }
+
+    try {
+      const obj = await getImageStream(key)
+      reply.header('Content-Type', obj.contentType ?? 'image/webp')
+      // Keys inmutables (uuid nuevo por subida): cache agresivo es seguro
+      reply.header('Cache-Control', 'public, max-age=31536000, immutable')
+      return reply.send(obj.body)
+    } catch (err) {
+      // Log del fallo real (S3 caído, credenciales…) pero al cliente: 404
+      request.log.warn({ err }, 'Proxy de imagen: objeto no legible')
+      return reply.code(404).send(errorEnvelope('Imagen no encontrada', 404))
+    }
+  })
 }

@@ -11,15 +11,20 @@
  *   - `deleteImage()` borra un objeto del bucket (para reemplazo/borrado).
  *
  * Notas:
- *   - La URL pública de lectura se construye con env.s3PublicUrl; la
- *     columna `products.imagen_url` guarda esa URL completa.
+ *   - LECTURA VÍA PROXY: las tablets de la LAN no pueden resolver el vhost
+ *     público de Garage (`productos.web.garage.localhost:3902`), así que la
+ *     columna `products.imagen_url` guarda una RUTA RELATIVA servida por
+ *     Fastify: `/images/{tenant_id}/prod_{uuid}.webp`. La tablet la resuelve
+ *     contra la URL base del servidor POS que ya conoce.
  *   - Este módulo NO toca la base de datos: solo el bucket. La escritura
- *     en `products.imagen_url` vive en el módulo que llama (uploads).
+ *     en `products.imagen_url` vive en el módulo que llama (products).
  * ────────────────────────────────────────────────────────────────────────
  */
 import { randomUUID } from 'node:crypto'
+import type { Readable } from 'node:stream'
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -55,7 +60,7 @@ function getS3Client(): S3Client {
 export interface UploadedImage {
   /** Key completa dentro del bucket: `{tenant_id}/prod_{uuid}.webp` */
   key: string
-  /** URL pública directa para leer la imagen (`{publicUrl}/{key}`) */
+  /** Ruta relativa servida por el proxy Fastify: `/images/{key}` */
   url: string
 }
 
@@ -65,8 +70,8 @@ export interface UploadedImage {
  * Optimiza y sube la imagen de un producto al bucket.
  *
  * Flujo: sharp (WebP q80, máx 1000×1000 sin agrandar) → key multi-tenant
- * → PutObject → URL pública. Lanza si sharp o S3 fallan (el caller decide
- * cómo responder); la BD no se modifica aquí.
+ * → PutObject → ruta relativa del proxy. Lanza si sharp o S3 fallan (el
+ * caller decide cómo responder); la BD no se modifica aquí.
  */
 export async function uploadProductImage(
   tenantId: string,
@@ -90,7 +95,7 @@ export async function uploadProductImage(
     }),
   )
 
-  return { key, url: `${env.s3PublicUrl}/${key}` }
+  return { key, url: `/images/${key}` }
 }
 
 /**
@@ -109,15 +114,36 @@ export async function deleteImage(key: string): Promise<void> {
 }
 
 /**
- * Extrae la key de una URL pública guardada en BD.
- * Retorna null si la URL no pertenece a este bucket/tenant (defensa
- * extra: nunca borrar un objeto fuera de `{s3PublicUrl}/{tenantId}/…`).
+ * Lee un objeto del bucket como stream (para el proxy GET /images/*).
+ * Lanza el error original si no existe (el caller mapea a 404).
+ */
+export async function getImageStream(
+  key: string,
+): Promise<{ body: Readable; contentType: string | undefined }> {
+  const res = await getS3Client().send(
+    new GetObjectCommand({ Bucket: env.s3Bucket, Key: key }),
+  )
+  return { body: res.Body as Readable, contentType: res.ContentType }
+}
+
+/**
+ * Extrae la key de una ruta de imagen guardada en BD.
+ * Formato esperado: `/images/{tenantId}/{archivo}` (proxy Fastify) o, por
+ * compatibilidad, `{s3PublicUrl}/{tenantId}/{archivo}`.
+ * Retorna null si la ruta no pertenece a este tenant (defensa extra:
+ * nunca borrar un objeto fuera del prefijo del tenant dueño).
  */
 export function keyFromUrl(url: string | null | undefined, tenantId: string): string | null {
   if (!url) return null
-  const prefix = `${env.s3PublicUrl}/${tenantId}/`
-  if (!url.startsWith(prefix)) return null
-  return `${tenantId}/${url.slice(prefix.length)}`
+  const proxyPrefix = `/images/${tenantId}/`
+  if (url.startsWith(proxyPrefix)) {
+    return `${tenantId}/${url.slice(proxyPrefix.length)}`
+  }
+  const publicPrefix = `${env.s3PublicUrl}/${tenantId}/`
+  if (url.startsWith(publicPrefix)) {
+    return `${tenantId}/${url.slice(publicPrefix.length)}`
+  }
+  return null
 }
 
 /* ── 4) HELPERS ──────────────────────────────────────────────────────── */

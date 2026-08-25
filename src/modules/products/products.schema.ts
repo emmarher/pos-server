@@ -113,6 +113,7 @@ export const productSchema: ApiDataSchema = {
     barcode: { type: ['string', 'null'] },
     internal_code: { type: ['string', 'null'] },
     sku: { type: ['string', 'null'] },
+    imagen_url: { type: ['string', 'null'] },
     base_unit_id: { type: 'string' },
     sale_unit_id: { type: 'string' },
     unit_conversion: { type: 'number' },

@@ -89,6 +89,7 @@ interface ProductRow {
   barcode: string | null
   internal_code: string | null
   sku: string | null
+  imagen_url: string | null
   base_unit_id: string
   sale_unit_id: string
   unit_conversion: number
@@ -250,6 +251,7 @@ function toProduct(row: ProductRow, prices: ProductPrice[]): Product {
     barcode: row.barcode,
     internal_code: row.internal_code,
     sku: row.sku,
+    imagen_url: row.imagen_url,
     base_unit_id: row.base_unit_id,
     sale_unit_id: row.sale_unit_id,
     unit_conversion: row.unit_conversion,
@@ -272,7 +274,8 @@ function toProduct(row: ProductRow, prices: ProductPrice[]): Product {
 const PRODUCT_SELECT = `
   SELECT
     p.id, p.tenant_id, p.category_id, p.name, p.description, p.barcode,
-    p.internal_code, p.sku, p.base_unit_id, p.sale_unit_id, p.unit_conversion,
+    p.internal_code, p.sku, p.imagen_url, p.base_unit_id, p.sale_unit_id,
+    p.unit_conversion,
     p.price, p.cost, p.stock, p.min_stock, p.max_stock, p.is_scale_enabled,
     p.allow_fractional_sale, p.is_active,
     c.name AS category_name, c.prefix AS category_prefix, c.color AS category_color,
@@ -555,7 +558,51 @@ export async function getProduct(tenantId: string, id: string): Promise<Product>
   return toProduct(row, prices)
 }
 
-/** GET /products/:id/prices — precios por tipo de precio (RF-CA-004). */
+/* ── Imágenes de producto (proxy Garage S3) ──────────────────────────── */
+
+/** Estado actual de la imagen de un producto. */
+export interface ProductImageState {
+  /** Ruta relativa actual (`/images/…`) o null si no tiene */
+  imagen_url: string | null
+}
+
+/**
+ * Verifica que el producto exista y sea del tenant; retorna su estado
+ * de imagen (aislamiento multi-tenant: producto ajeno → NOT_FOUND).
+ */
+export async function getProductImageState(
+  tenantId: string,
+  productId: string,
+): Promise<ProductImageState> {
+  const { rows } = await db.query<{ imagen_url: string | null }>(
+    'SELECT imagen_url FROM products WHERE tenant_id = $1 AND id = $2',
+    [tenantId, productId],
+  )
+  if (!rows[0]) {
+    throw new HttpError('NOT_FOUND', 'Producto no encontrado')
+  }
+  return { imagen_url: rows[0].imagen_url }
+}
+
+/**
+ * Guarda la ruta relativa de la imagen recién subida (null = quitar).
+ * El producto debe existir y ser del tenant (si no → NOT_FOUND).
+ */
+export async function setProductImageUrl(
+  tenantId: string,
+  productId: string,
+  url: string | null,
+): Promise<void> {
+  const { rowCount } = await db.query(
+    'UPDATE products SET imagen_url = $1, updated_at = $2 WHERE tenant_id = $3 AND id = $4',
+    [url, new Date().toISOString(), tenantId, productId],
+  )
+  if (!rowCount) {
+    throw new HttpError('NOT_FOUND', 'Producto no encontrado')
+  }
+}
+
+/* ── GET /products/:id/prices — precios por tipo de precio (RF-CA-004) ── */
 export async function getProductPrices(
   tenantId: string,
   productId: string,

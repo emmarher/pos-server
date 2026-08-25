@@ -73,6 +73,8 @@ export interface Product {
   /** Generado por trigger: {prefix}{4 dígitos}, ej. POO0042 */
   internal_code: string | null
   sku: string | null
+  /** Ruta relativa servida por el proxy: /images/{tenant_id}/prod_*.webp */
+  imagen_url: string | null
   base_unit_id: string
   sale_unit_id: string
   /** 1 venta = X base (descuento de stock en base_quantity). */
