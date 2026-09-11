@@ -172,10 +172,18 @@ export function buildApp(): FastifyInstance {
       const status = statusFor(code)
       let message = err.message || 'Error interno del servidor'
 
-      // Los errores inesperados se loguean completo (el cliente solo ve genérico)
+      // Los errores inesperados se loguean completo.
+      // En dev/test se expone el mensaje real (p.ej. SQLITE_ERROR detalle) para
+      // facilitar diagnóstico; en producción se enmascara por seguridad.
       if (status >= 500) {
         app.log.error({ err }, 'Error no manejado')
-        message = 'Error interno del servidor'
+        const isDev = env.logLevel !== 'error' && process.env.NODE_ENV !== 'production'
+        if (!isDev) {
+          message = 'Error interno del servidor'
+        } else if (err.message && err.message !== 'Error interno del servidor') {
+          // Exponer detalle útil (p.ej. "no such table: tenants") manteniendo envoltorio
+          message = err.message
+        }
       }
       return reply.code(status).send(errorEnvelope(message, status))
     },

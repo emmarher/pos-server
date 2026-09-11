@@ -190,13 +190,14 @@ export async function login(
 
   await db.query(
     `INSERT INTO active_sessions (tenant_id, device_id, user_id, jwt_token_hash, expires_at, ip_address, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [
       tenant.id,
       deviceId,
       user.id,
       hashToken(refreshToken),
       new Date(now.getTime() + REFRESH_EXPIRES_IN * 1000).toISOString(),
+      null,
       nowIso,
     ],
   )
@@ -294,13 +295,14 @@ export async function refresh(
   const nowIso = new Date().toISOString()
   await db.query(
     `INSERT INTO active_sessions (tenant_id, device_id, user_id, jwt_token_hash, expires_at, ip_address, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [
       payload.tenant_id,
       payload.device_id,
       payload.sub,
       hashToken(newRefresh),
       new Date(Date.now() + REFRESH_EXPIRES_IN * 1000).toISOString(),
+      null,
       nowIso,
     ],
   )

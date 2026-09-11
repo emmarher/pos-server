@@ -22,21 +22,40 @@ import { startDiscovery, stopDiscovery } from './services/udp-discovery.js'
 
 const app = buildApp()
 
-app.listen({ port: env.port, host: env.host }, (err, address) => {
-  if (err) {
-    app.log.fatal(err, 'No se pudo iniciar el servidor')
-    process.exit(1)
+// Validación temprana de esquema: falla rápido si la BD está vacía
+// (caso "no such table: tenants" visto en login). Si falla, indica
+// al usuario ejecutar migrate + seed.
+async function assertSchemaReady(): Promise<void> {
+  try {
+    await db.query('SELECT 1 FROM tenants LIMIT 1')
+  } catch (err) {
+    app.log.fatal(
+      err,
+      'Esquema no inicializado (no existe tenants). Ejecuta: npm run migrate && npm run seed',
+    )
+    throw err
   }
-  app.log.info(`POS Server escuchando en ${address}`)
+}
 
-  // UDP Discovery (RF-DS-001): el servidor responde a "POS_DISCOVER"
-  // en el puerto 5000 para que las tablets lo encuentren en la LAN.
-  startDiscovery()
-    .then(() => app.log.info('UDP Discovery service iniciado (puerto 5000)'))
-    .catch((discoveryErr) => {
-      app.log.error(discoveryErr, 'No se pudo iniciar UDP Discovery')
+assertSchemaReady()
+  .then(() => {
+    app.listen({ port: env.port, host: env.host }, (err, address) => {
+      if (err) {
+        app.log.fatal(err, 'No se pudo iniciar el servidor')
+        process.exit(1)
+      }
+      app.log.info(`POS Server escuchando en ${address}`)
+
+      // UDP Discovery (RF-DS-001): el servidor responde a "POS_DISCOVER"
+      // en el puerto 5000 para que las tablets lo encuentren en la LAN.
+      startDiscovery()
+        .then(() => app.log.info('UDP Discovery service iniciado (puerto 5000)'))
+        .catch((discoveryErr) => {
+          app.log.error(discoveryErr, 'No se pudo iniciar UDP Discovery')
+        })
     })
-})
+  })
+  .catch(() => process.exit(1))
 
 /* ── 2) APAGADO ORDENADO ─────────────────────────────────────────────── */
 
