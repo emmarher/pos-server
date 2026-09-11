@@ -12,6 +12,38 @@
  */
 import type { ApiDataSchema } from '../../types/response.js'
 
+/* ── Fila del listado de ventas (GET /sales) ───────────────────────────────── */
+
+/** Schema de una venta en el listado (incluye status para canceladas). */
+const saleListRowSchema: ApiDataSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string' },
+    folio: { type: 'string' },
+    seller_id: { type: ['string', 'null'] },
+    seller_name: { type: ['string', 'null'] },
+    customer_name: { type: ['string', 'null'] },
+    subtotal: { type: 'number' },
+    discount: { type: 'number' },
+    tax: { type: 'number' },
+    total: { type: 'number' },
+    payment_state: { type: 'string' },
+    status: { type: 'string' },
+    created_at: { type: 'string' },
+  },
+}
+
+/** Schema de la respuesta de GET /sales (listado con paginación). */
+export const salesListSchema: ApiDataSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: { type: 'array', items: saleListRowSchema },
+    total: { type: 'integer' },
+  },
+}
+
 /* ── Métodos de pago (RF-VE-004) ──────────────────────────────────────── */
 
 export const paymentMethodEnum = ['CASH', 'CARD', 'TRANSFER', 'CREDIT', 'VOUCHER'] as const
@@ -136,6 +168,23 @@ export const salePaymentSchema: ApiDataSchema = {
 }
 
 /* ── Detalle completo (GET /sales/:id) ─────────────────────────────────── */
+
+/** Schema del ticket almacenado para reimpresión (GET /sales/:id/ticket). */
+export const storedTicketSchema: ApiDataSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'sale_id', 'ticket_type', 'content', 'content_format', 'reprinted_count', 'created_at'],
+  properties: {
+    id: { type: 'string' },
+    sale_id: { type: 'string' },
+    ticket_type: { type: 'string' },
+    content: { type: 'string' },
+    content_format: { type: 'string' },
+    printed_at: { type: ['string', 'null'] },
+    reprinted_count: { type: 'integer' },
+    created_at: { type: 'string' },
+  },
+}
 
 export const saleDetailSchema: ApiDataSchema = {
   type: 'object',

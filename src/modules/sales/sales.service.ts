@@ -139,7 +139,8 @@ async function loadProduct(
             su.unit_type AS sale_unit_type
      FROM products p
      JOIN measurement_units su ON su.id = p.sale_unit_id
-     WHERE p.tenant_id = $1 AND p.id = $2`,
+     WHERE p.tenant_id = $1 AND p.id = $2
+     FOR UPDATE`,
     [tenantId, productId],
   )
   const product = rows[0]
@@ -248,7 +249,13 @@ export async function createSale(
 
   const { tenant_id, seller_id, device_id } = actor
 
-  return db.transaction(async (tx) => {
+  /* RF-VE-003: transacción atómica. FOR UPDATE en loadProduct bloquea la fila
+     de stock durante toda la transacción, evitando que dos cajeros lean stock
+     stale y vendan el mismo lote (race condition). El segundo cajero queda
+     bloqueado hasta que el primero hace COMMIT, luego lee stock real y falla
+     con INSUFFICIENT_STOCK (422) en lugar de un error de constraint (500). */
+  try {
+    return await db.transaction(async (tx) => {
     /* 2) Folio dentro de la transacción (único por tenant+prefix). */
     const folioNumber = await nextFolio(tx, tenant_id)
 
@@ -563,6 +570,28 @@ export async function createSale(
       qos_event_id: qosRows[0]?.id,
     }
   })
+  } catch (err: unknown) {
+    /* Defense-in-depth: si el trigger CHECK dispara por una condición de
+       carrera no cubierta por FOR UPDATE, convertir a INSUFFICIENT_STOCK (422)
+       en lugar de un 500 genérico. */
+    if (isPgCheckViolation(err)) {
+      throw new HttpError(
+        'INSUFFICIENT_STOCK',
+        'Otro cajero acaba de vender el stock disponible. Intente nuevamente.',
+      )
+    }
+    throw err
+  }
+}
+
+/** Detecta violaciones de CHECK de PostgreSQL (código 23514). */
+function isPgCheckViolation(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: string }).code === '23514'
+  )
 }
 
 /** Nombre comercial para el ticket (tenant_settings.business_name). */
@@ -628,6 +657,34 @@ export async function getSale(tenantId: string, saleId: string): Promise<SaleDet
     items,
     payments,
   }
+}
+
+/** Fila de stored_tickets para reimpresión. */
+export interface StoredTicket {
+  id: string
+  sale_id: string
+  ticket_type: string
+  content: string
+  content_format: string
+  printed_at: string | null
+  reprinted_count: number
+  created_at: string
+}
+
+/** Obtiene el ticket almacenado de una venta para reimprimir (RF-CC-003, RF-IM). */
+export async function getTicket(tenantId: string, saleId: string): Promise<StoredTicket> {
+  const { rows } = await db.query<StoredTicket>(
+    `SELECT id, sale_id, ticket_type, content, content_format,
+            printed_at, reprinted_count, created_at
+     FROM stored_tickets
+     WHERE tenant_id = $1 AND sale_id = $2 AND ticket_type = 'SALE'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [tenantId, saleId],
+  )
+  const ticket = rows[0]
+  if (!ticket) throw new HttpError('NOT_FOUND', 'Ticket de venta no encontrado')
+  return ticket
 }
 
 /* ── POST /sales/:id/cancel ───────────────────────────────────────────── */
@@ -736,6 +793,83 @@ export async function cancelSale(
       created_at: now,
     }
   })
+}
+
+/* ── GET /sales (listado para "mis tickets" y reportes) ─────────────────── */
+
+/** Fila de listado de ventas (incluye status para canceladas). */
+export interface SaleListRow {
+  id: string
+  folio: string
+  seller_id: string | null
+  seller_name: string | null
+  customer_name: string | null
+  subtotal: number
+  discount: number
+  tax: number
+  total: number
+  payment_state: string
+  status: string
+  created_at: string
+}
+
+/**
+ * Lista ventas del tenant con filtros opcionales (fecha, vendedor).
+ * `sales:read_own` filtra por seller_id; `sales:read_all` ve todas.
+ */
+export async function listSales(
+  tenantId: string,
+  params: { from?: string; to?: string; seller_id?: string; limit?: number; offset?: number },
+): Promise<{ items: SaleListRow[]; total: number }> {
+  const limit = Math.min(Math.max(params.limit ?? 20, 1), 100)
+  const offset = Math.max(params.offset ?? 0, 0)
+
+  const conditions: string[] = ['s.tenant_id = $1']
+  const values: unknown[] = [tenantId]
+  let idx = 2
+
+  if (params.seller_id) {
+    conditions.push(`s.seller_id = $${idx++}`)
+    values.push(params.seller_id)
+  }
+  if (params.from) {
+    conditions.push(`s.created_at >= $${idx++}`)
+    values.push(params.from)
+  }
+  if (params.to) {
+    conditions.push(`s.created_at <= $${idx++}`)
+    values.push(params.to)
+  }
+
+  const whereSql = conditions.join(' AND ')
+
+  const [{ rows: countRows }, { rows }] = await Promise.all([
+    db.query<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM sales s WHERE ${whereSql}`,
+      values,
+    ),
+    db.query<SaleListRow>(
+      `SELECT s.id,
+              s.folio_display AS folio,
+              s.seller_id,
+              u.name AS seller_name,
+              c.name AS customer_name,
+              s.subtotal, s.discount, s.tax, s.total,
+              s.payment_state, s.status, s.created_at
+       FROM sales s
+       LEFT JOIN users u ON u.id = s.seller_id
+       LEFT JOIN customers c ON c.id = s.customer_id
+       WHERE ${whereSql}
+       ORDER BY s.created_at DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...values, limit, offset],
+    ),
+  ])
+
+  return {
+    items: rows,
+    total: countRows[0]?.total ?? 0,
+  }
 }
 
 /* ── Ticket ESC/POS (texto plano, content_format='ESC_POS') ───────────── */

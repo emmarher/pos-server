@@ -21,9 +21,11 @@ import {
   createSaleBodySchema,
   idParamsSchema,
   saleDetailSchema,
+  salesListSchema,
   saleResponseSchema,
+  storedTicketSchema,
 } from './sales.schema.js'
-import { cancelSale, createSale, getSale } from './sales.service.js'
+import { cancelSale, createSale, getSale, getTicket, listSales } from './sales.service.js'
 
 /** Request autenticado: el JWT trae tenant_id, sub (seller) y device_id. */
 type AuthedRequest = FastifyRequest & { user: AuthJwtPayload }
@@ -67,6 +69,65 @@ export function salesRoutes(app: FastifyInstance): void {
       const { id } = request.params as { id: string }
       const sale = await getSale(request.user.tenant_id, id)
       return okEnvelope(sale, `Venta ${sale.folio} encontrada`, 200)
+    },
+  )
+
+  /* ── GET /sales (listado para "mis tickets", RF-VE-006) ──────────────── */
+  app.get(
+    '/sales',
+    {
+      preHandler: [authenticate, requirePermission('sales:read_own')],
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            from: { type: 'string' },
+            to: { type: 'string' },
+            seller_id: { type: 'string' },
+            limit: { type: 'integer', minimum: 1, maximum: 100 },
+            offset: { type: 'integer', minimum: 0 },
+          },
+        },
+        response: { 200: okEnvelopeSchema(salesListSchema) },
+      },
+    },
+    async (request: AuthedRequest) => {
+      const q = request.query as {
+        from?: string
+        to?: string
+        seller_id?: string
+        limit?: number
+        offset?: number
+      }
+      // Si el usuario solo tiene sales:read_own (no read_all), filtra por su seller_id
+      const hasReadAll = request.user.permissions.includes('sales:read_all')
+      const sellerId = !hasReadAll ? request.user.sub : q.seller_id
+      const history = await listSales(request.user.tenant_id, {
+        from: q.from,
+        to: q.to,
+        seller_id: sellerId,
+        limit: q.limit,
+        offset: q.offset,
+      })
+      return okEnvelope(history, 'Listado de ventas', 200)
+    },
+  )
+
+  /* ── GET /sales/:id/ticket (reimpresión de ticket almacenado) ────────── */
+  app.get(
+    '/sales/:id/ticket',
+    {
+      preHandler: [authenticate, requirePermission('sales:read_own')],
+      schema: {
+        params: idParamsSchema,
+        response: { 200: okEnvelopeSchema(storedTicketSchema) },
+      },
+    },
+    async (request: AuthedRequest) => {
+      const { id } = request.params as { id: string }
+      const ticket = await getTicket(request.user.tenant_id, id)
+      return okEnvelope(ticket, `Ticket de ${ticket.ticket_type}`, 200)
     },
   )
 

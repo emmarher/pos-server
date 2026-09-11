@@ -38,6 +38,10 @@ import { productsRoutes } from './modules/products/products.routes.js'
 import { salesRoutes } from './modules/sales/sales.routes.js'
 import { cashierRoutes } from './modules/cashier/cashier.routes.js'
 import { customersRoutes } from './modules/customers/customers.routes.js'
+import { reportsRoutes } from './modules/reports/reports.routes.js'
+import { printRoutes } from './modules/print/print.routes.js'
+import { scaleRoutes } from './modules/scale/scale.routes.js'
+import { qosRoutes } from './modules/qos/qos.routes.js'
 import { registerDiscoveryRoutes } from './services/udp-discovery.js'
 import { HttpError } from './types/errors.js'
 import {
@@ -139,6 +143,10 @@ export function buildApp(): FastifyInstance {
   void app.register(inventoryRoutes)
   void app.register(cashierRoutes)
   void app.register(customersRoutes)
+  void app.register(reportsRoutes)
+  void app.register(printRoutes)
+  void app.register(scaleRoutes)
+  void app.register(qosRoutes)
 
   /* Rutas de utilidad del descubrimiento UDP (status/config) */
   void app.register(registerDiscoveryRoutes)
