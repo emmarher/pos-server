@@ -85,6 +85,7 @@ export function salesRoutes(app: FastifyInstance): void {
             from: { type: 'string' },
             to: { type: 'string' },
             seller_id: { type: 'string' },
+            folio: { type: 'string', minLength: 1, maxLength: 20 },
             limit: { type: 'integer', minimum: 1, maximum: 100 },
             offset: { type: 'integer', minimum: 0 },
           },
@@ -97,6 +98,7 @@ export function salesRoutes(app: FastifyInstance): void {
         from?: string
         to?: string
         seller_id?: string
+        folio?: string
         limit?: number
         offset?: number
       }
@@ -107,6 +109,7 @@ export function salesRoutes(app: FastifyInstance): void {
         from: q.from,
         to: q.to,
         seller_id: sellerId,
+        folio: q.folio,
         limit: q.limit,
         offset: q.offset,
       })

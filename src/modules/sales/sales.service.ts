@@ -819,7 +819,7 @@ export interface SaleListRow {
  */
 export async function listSales(
   tenantId: string,
-  params: { from?: string; to?: string; seller_id?: string; limit?: number; offset?: number },
+  params: { from?: string; to?: string; seller_id?: string; folio?: string; limit?: number; offset?: number },
 ): Promise<{ items: SaleListRow[]; total: number }> {
   const limit = Math.min(Math.max(params.limit ?? 20, 1), 100)
   const offset = Math.max(params.offset ?? 0, 0)
@@ -839,6 +839,13 @@ export async function listSales(
   if (params.to) {
     conditions.push(`s.created_at <= $${idx++}`)
     values.push(params.to)
+  }
+  if (params.folio) {
+    const folio = params.folio.trim().toUpperCase()
+    if (folio) {
+      conditions.push(`UPPER(s.folio_display) LIKE UPPER($${idx++})`)
+      values.push(`${folio}%`)
+    }
   }
 
   const whereSql = conditions.join(' AND ')
