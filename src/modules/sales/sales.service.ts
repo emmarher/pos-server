@@ -133,14 +133,14 @@ async function loadProduct(
   tenantId: string,
   productId: string,
 ): Promise<ProductStockRow> {
+  const forUpdate = env.dbProvider === 'postgres' ? ' FOR UPDATE' : ''
   const { rows } = await tx.query<ProductStockRow>(
     `SELECT p.id, p.tenant_id, p.name, p.barcode, p.base_unit_id, p.sale_unit_id,
             p.unit_conversion, p.price, p.stock, p.min_stock, p.is_active, p.allow_fractional_sale,
             su.unit_type AS sale_unit_type
      FROM products p
      JOIN measurement_units su ON su.id = p.sale_unit_id
-     WHERE p.tenant_id = $1 AND p.id = $2
-     FOR UPDATE`,
+     WHERE p.tenant_id = $1 AND p.id = $2${forUpdate}`,
     [tenantId, productId],
   )
   const product = rows[0]
