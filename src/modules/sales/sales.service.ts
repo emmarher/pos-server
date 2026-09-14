@@ -573,12 +573,16 @@ export async function createSale(
   } catch (err: unknown) {
     /* Defense-in-depth: si el trigger CHECK dispara por una condición de
        carrera no cubierta por FOR UPDATE, convertir a INSUFFICIENT_STOCK (422)
-       en lugar de un 500 genérico. */
-    if (isPgCheckViolation(err)) {
+       en lugar de un 500 genérico. También mapea SQLITE_BUSY y
+       SQLITE_CONSTRAINT_CHECK para SQLite con pool WAL. */
+    if (isPgCheckViolation(err) || isSqliteCheckViolation(err)) {
       throw new HttpError(
         'INSUFFICIENT_STOCK',
         'Otro cajero acaba de vender el stock disponible. Intente nuevamente.',
       )
+    }
+    if (isSqliteBusy(err)) {
+      throw new HttpError('CONFLICT', 'Base de datos ocupada, reintente en un momento')
     }
     throw err
   }
@@ -592,6 +596,18 @@ function isPgCheckViolation(err: unknown): boolean {
     'code' in err &&
     (err as { code?: string }).code === '23514'
   )
+}
+
+function isSqliteCheckViolation(err: unknown): boolean {
+  const code = (err as { code?: string })?.code
+  const msg = (err as { message?: string })?.message ?? ''
+  return code === 'SQLITE_CONSTRAINT_CHECK' || code === 'SQLITE_CONSTRAINT' || msg.includes('CHECK constraint failed')
+}
+
+function isSqliteBusy(err: unknown): boolean {
+  const code = (err as { code?: string })?.code
+  const msg = (err as { message?: string })?.message ?? ''
+  return code === 'SQLITE_BUSY' || msg.includes('database is locked') || msg.includes('database table is locked')
 }
 
 /** Nombre comercial para el ticket (tenant_settings.business_name). */

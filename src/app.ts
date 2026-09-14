@@ -206,6 +206,9 @@ function toErrorCode(err: unknown): ErrorCode {
   if (isFastifyError(err, 'FST_JWT_BAD_REQUEST')) return 'UNAUTHORIZED'
   if (isFastifyError(err, 'FST_JWT_AUTHORIZATION_TOKEN_INVALID')) return 'UNAUTHORIZED'
   if (isFastifyError(err, 'FST_JWT_AUTHORIZATION_TOKEN_EXPIRED')) return 'UNAUTHORIZED'
+  // SQLite WAL: busy se mapea a CONFLICT (409) para reintento cliente
+  if (isSqliteBusy(err)) return 'CONFLICT'
+  if (isSqliteCheckViolation(err)) return 'INSUFFICIENT_STOCK'
   return 'INTERNAL'
 }
 
@@ -230,6 +233,18 @@ function statusFor(code: ErrorCode): number {
     default:
       return 500
   }
+}
+
+function isSqliteBusy(err: unknown): boolean {
+  const code = (err as { code?: string })?.code
+  const msg = (err as { message?: string })?.message ?? ''
+  return code === 'SQLITE_BUSY' || msg.includes('database is locked') || msg.includes('database table is locked')
+}
+
+function isSqliteCheckViolation(err: unknown): boolean {
+  const code = (err as { code?: string })?.code
+  const msg = (err as { message?: string })?.message ?? ''
+  return code === 'SQLITE_CONSTRAINT_CHECK' || code === 'SQLITE_CONSTRAINT' || msg.includes('CHECK constraint failed')
 }
 
 /** Comprueba si el error de Fastify tiene el code indicado. */

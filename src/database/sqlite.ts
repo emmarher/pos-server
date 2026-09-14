@@ -16,71 +16,180 @@
  *     así las consultas son idénticas para ambos proveedores.
  *   - `exec()` (multi-sentencia) se usa para migraciones y PRAGMA.
  *
- * LIMITACIÓN CONOCIDA (dev): la transacción usa BEGIN/COMMIT manual sobre
- * la conexión única síncrona de better-sqlite3; en producción el adaptador
- * postgres usa un cliente dedicado del pool con aislamiento real.
+ * CONCURRENCIA (WAL + busy_timeout + pool):
+ *   - journal_mode=WAL por defecto (lectores no bloquean escritor) + validado
+ *     que el pragma realmente quedó en WAL.
+ *   - busy_timeout configurable (default 5000ms) para esperar lock en vez de
+ *     fallar inmediato con SQLITE_BUSY.
+ *   - synchronous=NORMAL (WAL) configurable, cache_size, mmap_size, etc.
+ *   - Pool de lectura configurable 2-4 conexiones (round-robin) + 1 escritura
+ *     serializada mediante cola Promise (BEGIN IMMEDIATE).
  * ────────────────────────────────────────────────────────────────────────
  */
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import Database from 'better-sqlite3'
+import { env } from '../config/env.js'
 import type { DbClient, QueryResult } from './client.js'
 
 /* ── Adaptador ────────────────────────────────────────────────────────── */
 
 /** Cliente SQLite que implementa la interfaz unificada DbClient. */
 export class SqliteClient implements DbClient {
-  private readonly db: Database.Database
+  private readonly writer: Database.Database
+  private readonly readers: Database.Database[]
+  private nextReader = 0
+  private writeQueue: Promise<void> = Promise.resolve()
 
   constructor(path: string) {
-    // Asegura que el directorio del archivo exista (p. ej. ./data/)
     mkdirSync(dirname(path), { recursive: true })
-    this.db = new Database(path)
-    // WAL: lecturas concurrentes sin bloquear; foreign_keys: integridad real
-    this.db.pragma('journal_mode = WAL')
-    this.db.pragma('foreign_keys = ON')
+    this.writer = this.openWithPragmas(path)
+    const poolSize = env.sqlitePoolReadSize
+    this.readers = Array.from({ length: poolSize }, () => this.openWithPragmas(path))
+    console.info(
+      `[sqlite] WAL pool ready: journal_mode=WAL synchronous=${env.sqliteSynchronous} busy_timeout=${env.sqliteBusyTimeoutMs}ms pool_read=${poolSize} writer=1 cache=${env.sqliteCacheSizeKb} mmap=${env.sqliteMmapSize}`,
+    )
+  }
+
+  private openWithPragmas(path: string): Database.Database {
+    const db = new Database(path)
+    // WAL por defecto + validación (puede revertir a delete si falla)
+    db.pragma('journal_mode = WAL')
+    const mode = (db.pragma('journal_mode', { simple: true }) as string)?.toLowerCase()
+    if (mode !== 'wal') {
+      console.warn(`[sqlite] journal_mode no es WAL (actual: ${mode}), lectores podrían bloquear escritor`)
+    }
+    db.pragma(`busy_timeout = ${env.sqliteBusyTimeoutMs}`)
+    db.pragma(`synchronous = ${env.sqliteSynchronous}`)
+    db.pragma('foreign_keys = ON')
+    db.pragma(`cache_size = ${env.sqliteCacheSizeKb}`)
+    db.pragma('temp_store = MEMORY')
+    db.pragma(`mmap_size = ${env.sqliteMmapSize}`)
+    // Limitar WAL y autocheckpoint (evita crecimiento ilimitado)
+    try {
+      db.pragma('journal_size_limit = 67108864')
+      db.pragma('wal_autocheckpoint = 1000')
+    } catch {
+      /* pragmas opcionales en versiones viejas */
+    }
+    return db
+  }
+
+  private pickReader(): Database.Database {
+    const r = this.readers[this.nextReader % this.readers.length]!
+    this.nextReader = (this.nextReader + 1) % this.readers.length
+    return r
+  }
+
+  private isSelect(sql: string): boolean {
+    return /^\s*SELECT/i.test(sql)
+  }
+
+  private enqueueWrite<T>(work: () => T | Promise<T>): Promise<T> {
+    const run = () => {
+      try {
+        const result = work()
+        return result instanceof Promise ? result : Promise.resolve(result)
+      } catch (err) {
+        return Promise.reject(err)
+      }
+    }
+    const result = this.writeQueue.then(run, run) as Promise<T>
+    // Mantener la cola viva aunque falle una escritura
+    this.writeQueue = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
   }
 
   /** Ejecuta una consulta y devuelve { rows, rowCount } (forma pg). */
-  query<T = unknown>(
-    sql: string,
-    params: unknown[] = [],
-  ): Promise<QueryResult<T>> {
-    const { sql: sqliteSql, params: sqliteParams } = translatePlaceholders(
-      sql,
-      params,
-    )
-    const stmt = this.db.prepare(sqliteSql)
-    if (stmt.reader) {
-      const rows = stmt.all(...sqliteParams) as T[]
-      return Promise.resolve({ rows, rowCount: rows.length })
+  query<T = unknown>(sql: string, params: unknown[] = []): Promise<QueryResult<T>> {
+    const { sql: sqliteSql, params: sqliteParams } = translatePlaceholders(sql, params)
+    const useReader = this.isSelect(sql)
+    if (useReader) {
+      const db = this.pickReader()
+      const stmt = db.prepare(sqliteSql)
+      if (stmt.reader) {
+        const rows = stmt.all(...sqliteParams) as T[]
+        return Promise.resolve({ rows, rowCount: rows.length })
+      }
+      const info = stmt.run(...sqliteParams)
+      return Promise.resolve({ rows: [] as T[], rowCount: info.changes })
     }
-    const info = stmt.run(...sqliteParams)
-    return Promise.resolve({ rows: [] as T[], rowCount: info.changes })
+    // Escrituras via writer serializado (RETURNING incluye reader=true -> se maneja igual pero encolado)
+    return this.enqueueWrite(() => {
+      const stmt = this.writer.prepare(sqliteSql)
+      if (stmt.reader) {
+        const rows = stmt.all(...sqliteParams) as T[]
+        return { rows, rowCount: rows.length }
+      }
+      const info = stmt.run(...sqliteParams)
+      return { rows: [] as T[], rowCount: info.changes }
+    })
   }
 
-  /** Ejecuta SQL multi-sentencia (migraciones). */
+  /** Ejecuta SQL multi-sentencia (migraciones). Encolado en writer. */
   exec(sql: string): Promise<void> {
-    this.db.exec(sql)
-    return Promise.resolve()
+    return this.enqueueWrite(() => {
+      this.writer.exec(sql)
+    })
   }
 
-  /** Transacción manual (BEGIN/COMMIT/ROLLBACK) sobre la conexión única. */
+  /** Transacción serializada con BEGIN IMMEDIATE (adquiere lock de escritura al inicio). */
   async transaction<T>(fn: (tx: DbClient) => Promise<T>): Promise<T> {
-    this.db.exec('BEGIN')
-    try {
-      const result = await fn(this)
-      this.db.exec('COMMIT')
-      return result
-    } catch (err) {
-      this.db.exec('ROLLBACK')
-      throw err
-    }
+    return this.enqueueWrite(async () => {
+      this.writer.exec('BEGIN IMMEDIATE')
+      try {
+        const tx: DbClient = {
+          query: <U = unknown>(s: string, p: unknown[] = []) => {
+            const { sql: ss, params: pp } = translatePlaceholders(s, p)
+            const stmt = this.writer.prepare(ss)
+            if (stmt.reader) {
+              const rows = stmt.all(...pp) as U[]
+              return Promise.resolve({ rows, rowCount: rows.length })
+            }
+            const info = stmt.run(...pp)
+            return Promise.resolve({ rows: [] as U[], rowCount: info.changes })
+          },
+          exec: (s: string) => {
+            this.writer.exec(s)
+            return Promise.resolve()
+          },
+          transaction: () => {
+            throw new Error('Transacciones anidadas no soportadas')
+          },
+          end: () => Promise.resolve(),
+        }
+        const result = await fn(tx)
+        this.writer.exec('COMMIT')
+        return result
+      } catch (err) {
+        try {
+          this.writer.exec('ROLLBACK')
+        } catch {
+          /* rollback puede fallar si no hay transacción */
+        }
+        throw err
+      }
+    })
   }
 
-  /** Cierra el archivo SQLite. */
+  /** Cierra escritor + lectores y checkpoint WAL. */
   end(): Promise<void> {
-    this.db.close()
+    try {
+      this.writer.pragma('wal_checkpoint(TRUNCATE)')
+    } catch {
+      /* best-effort */
+    }
+    this.writer.close()
+    for (const r of this.readers) {
+      try {
+        r.close()
+      } catch {
+        /* ignore */
+      }
+    }
     return Promise.resolve()
   }
 }
@@ -103,8 +212,6 @@ function translatePlaceholders(
 
   const translated = sql.replace(/\$(\d+)/g, (_, raw) => {
     const n = Number(raw)
-    // params viene en orden $1..$N (como en PostgreSQL); ligar cada
-    // aparición (posicional) al mismo valor del array original.
     reordered.push(params[n - 1])
     return '?'
   })

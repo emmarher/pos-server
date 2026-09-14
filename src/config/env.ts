@@ -36,6 +36,16 @@ export interface AppEnv {
   dbProvider: DbProvider
   /** Ruta del archivo SQLite (solo usado cuando dbProvider === 'sqlite') */
   sqlitePath: string
+  /** WAL por defecto (solo sqlite); pool lectura configurable 2-4 */
+  sqlitePoolReadSize: number
+  /** Busy timeout en ms (solo sqlite, default 5000) */
+  sqliteBusyTimeoutMs: number
+  /** Synchronous pragma (solo sqlite, NORMAL para WAL) */
+  sqliteSynchronous: 'NORMAL' | 'FULL'
+  /** Tamaño de cache en KB (negativo, default -64000 = 64 MiB) */
+  sqliteCacheSizeKb: number
+  /** Tamaño mmap en bytes (default 32 MiB) */
+  sqliteMmapSize: number
   /** Conexión a PostgreSQL 16 (fuente única de verdad, multi-tenant) */
   databaseUrl: string
   /** Secreto para firmar JWT (access 24h + refresh) */
@@ -96,6 +106,11 @@ function loadEnv(): AppEnv {
     host: process.env.HOST ?? '0.0.0.0',
     dbProvider,
     sqlitePath: process.env.SQLITE_PATH ?? './data/pos.sqlite',
+    sqlitePoolReadSize: normalizePoolReadSize(process.env.SQLITE_POOL_READ_SIZE),
+    sqliteBusyTimeoutMs: normalizeBusyTimeout(process.env.SQLITE_BUSY_TIMEOUT_MS),
+    sqliteSynchronous: normalizeSynchronous(process.env.SQLITE_SYNCHRONOUS),
+    sqliteCacheSizeKb: normalizeCacheSizeKb(process.env.SQLITE_CACHE_SIZE_KB),
+    sqliteMmapSize: normalizeMmapSize(process.env.SQLITE_MMAP_SIZE),
     databaseUrl:
       process.env.DATABASE_URL ?? 'postgres://pos:pos@127.0.0.1:5432/pos',
     jwtSecret,
@@ -166,6 +181,35 @@ function normalizeDbProvider(raw: string | undefined): DbProvider {
   throw new Error(
     `DB_PROVIDER inválido: "${raw}". Usa "sqlite" (dev) o "postgres" (prod).`,
   )
+}
+
+function normalizePoolReadSize(raw: string | undefined): number {
+  const n = Number(raw ?? 3)
+  if (!Number.isFinite(n) || n < 2 || n > 4) return 3
+  return Math.floor(n)
+}
+
+function normalizeBusyTimeout(raw: string | undefined): number {
+  const n = Number(raw ?? 5000)
+  if (!Number.isFinite(n) || n < 0 || n > 30000) return 5000
+  return Math.floor(n)
+}
+
+function normalizeSynchronous(raw: string | undefined): 'NORMAL' | 'FULL' {
+  const v = (raw ?? 'NORMAL').trim().toUpperCase()
+  return v === 'FULL' ? 'FULL' : 'NORMAL'
+}
+
+function normalizeCacheSizeKb(raw: string | undefined): number {
+  const n = Number(raw ?? -64000)
+  if (!Number.isFinite(n) || n === 0) return -64000
+  return Math.floor(n)
+}
+
+function normalizeMmapSize(raw: string | undefined): number {
+  const n = Number(raw ?? 32 * 1024 * 1024)
+  if (!Number.isFinite(n) || n < 0) return 32 * 1024 * 1024
+  return Math.floor(n)
 }
 
 /* ── 3) INSTANCIA ÚNICA EXPORTADA ────────────────────────────────────── */
