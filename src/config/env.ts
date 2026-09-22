@@ -14,6 +14,8 @@
  * ────────────────────────────────────────────────────────────────────────
  */
 import 'dotenv/config'
+import os from 'node:os'
+import path from 'node:path'
 
 /* ── 1) INTERFAZ DE CONFIGURACIÓN ────────────────────────────────────── */
 
@@ -78,6 +80,17 @@ export interface AppEnv {
   s3PublicUrl: string
   /** Tamaño máximo por imagen en MB (default 5) */
   s3MaxFileSizeMb: number
+
+  /* ── Sistema de licencias firmadas (Ed25519) ─────────────────────────── */
+
+  /** Ruta del archivo .lic firmado (fuera de la carpeta de programa). */
+  licenseFilePath: string
+  /** Ruta a la clave pública PEM (solo dev; en prod se embebe al build). */
+  publicKeyPath: string
+  /** Si true, la falta de .lic bloquea (prod). Si false, modo degradado (dev). */
+  licenseStrict: boolean
+  /** Secreto para HMAC anti-rollback (si no se fija, deriva de JWT_SECRET). */
+  licenseHmacSecret: string
 }
 
 /* ── 2) CARGA Y VALIDACIÓN ───────────────────────────────────────────── */
@@ -123,6 +136,17 @@ function loadEnv(): AppEnv {
     // se desactiva el módulo con warning en vez de tumbar el arranque
     // (las imágenes son un extra: la venta nunca debe depender de Garage).
     ...loadImagesEnv(),
+
+    /* ── Sistema de licencias firmadas (Ed25519) ──────────────────────── */
+
+    licenseFilePath:
+      process.env.LICENSE_FILE_PATH?.trim() || defaultLicenseFilePath(),
+    publicKeyPath: process.env.PUBLIC_KEY_PATH?.trim() || '../tools/keys/mipos_public.pem',
+    licenseStrict:
+      (process.env.LICENSE_STRICT?.trim().toLowerCase() === 'true') ||
+      process.env.NODE_ENV === 'production',
+    licenseHmacSecret:
+      process.env.LICENSE_HMAC_SECRET?.trim() || process.env.JWT_SECRET?.trim() || jwtSecret,
   }
 }
 
@@ -167,6 +191,14 @@ function loadImagesEnv(): Pick<
     s3PublicUrl,
     s3MaxFileSizeMb: Number.isFinite(s3MaxFileSizeMb) && s3MaxFileSizeMb > 0 ? s3MaxFileSizeMb : 5,
   }
+}
+
+/**
+ * Default de la ruta del .lic según el SO.
+ * Usa os.homedir() para ser portable y NO depender de la carpeta de programa.
+ */
+function defaultLicenseFilePath(): string {
+  return path.join(os.homedir(), '.pos', 'license.lic')
 }
 
 /**

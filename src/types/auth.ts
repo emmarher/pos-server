@@ -89,11 +89,8 @@ export interface AuthDeviceInfo {
   can_scale: boolean
 }
 
-export interface AuthLicenseInfo {
-  status: 'active' | 'expired' | 'grace'
-  expires_at: string
-  max_devices: number
-}
+/** Re-export canonico: el contrato de licencia es unico (types/license.ts). */
+export type AuthLicenseInfo = import('./license.js').LicenseInfo
 
 /* ── Códigos de error del módulo auth (re-export para comodidad) ──────── */
 

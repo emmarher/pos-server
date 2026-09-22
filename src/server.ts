@@ -17,10 +17,14 @@ import { buildApp } from './app.js'
 import { env } from './config/env.js'
 import { db } from './database/client.js'
 import { startDiscovery, stopDiscovery } from './services/udp-discovery.js'
+import { validateLicenseAtStartup } from './modules/license/license.service.js'
+import { startLicenseMonitor } from './services/license-monitor.js'
 
 /* ── 1) ARRANQUE ─────────────────────────────────────────────────────── */
 
 const app = buildApp()
+/* Monitor de background (heartbeat TTL + expiración en caliente) */
+let licenseMonitor: ReturnType<typeof startLicenseMonitor> | null = null
 
 // Validación temprana de esquema: falla rápido si la BD está vacía
 // (caso "no such table: tenants" visto en login). Si falla, indica
@@ -38,13 +42,37 @@ async function assertSchemaReady(): Promise<void> {
 }
 
 assertSchemaReady()
-  .then(() => {
-    app.listen({ port: env.port, host: env.host }, (err, address) => {
+  .then(async () => {
+    /* Validar la licencia firmada al arranque (checklist de 8 pasos).
+       Si la licencia es válida, actualiza tenants + license_state.
+       Si es inválida/expirada, desactiva el tenant. Si falta el .lic,
+       entra en modo degradado (usa los campos BD existentes). */
+    const licenseStatus = await validateLicenseAtStartup(app)
+    if (licenseStatus === 'active') {
+      app.log.info('Licencia válida — servidor operativo')
+    } else if (licenseStatus === 'missing') {
+      app.log.warn('Sin archivo de licencia — modo degradado (usa campos BD)')
+    } else if (licenseStatus === 'invalid') {
+      app.log.error('Licencia inválida (firma rota) — servidor en modo bloqueado')
+    } else if (licenseStatus === 'expired') {
+      app.log.warn('Licencia expirada — servidor en modo degradado (ventas bloqueadas)')
+    } else if (licenseStatus === 'grace_clock') {
+      app.log.warn('Retroceso de reloj detectado — ventas bloqueadas (gracia expirada)')
+    } else if (licenseStatus === 'grace_fingerprint') {
+      app.log.warn('Fingerprint no coincide — modo gracia 15 días')
+    } else if (licenseStatus === 'unsupported_schema') {
+      app.log.warn('Schema de licencia no soportado — actualice el server')
+    }
+
+    return app.listen({ port: env.port, host: env.host }, (err, address) => {
       if (err) {
         app.log.fatal(err, 'No se pudo iniciar el servidor')
         process.exit(1)
       }
       app.log.info(`POS Server escuchando en ${address}`)
+
+      /* Monitor de background: heartbeat TTL + expiración en caliente */
+      licenseMonitor = startLicenseMonitor(app)
 
       // UDP Discovery (RF-DS-001): el servidor responde a "POS_DISCOVER"
       // en el puerto 5000 para que las tablets lo encuentren en la LAN.
@@ -63,6 +91,7 @@ assertSchemaReady()
 async function shutdown(signal: string): Promise<void> {
   app.log.info(`Recibido ${signal} — apagando…`)
   try {
+    licenseMonitor?.stop()
     await stopDiscovery()
     await app.close()
     await db.end()

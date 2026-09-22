@@ -5,6 +5,16 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# ── Clave pública embebida (generada por scripts/generatePublicKey.js) ─
+src/keys/publicKey.ts
+
+# ── Clave privada de test (generada por tests/global-setup.ts) ─
+tests/test-private.pem
+
+# ── Archivo de licencia (.lic) y datos del server ─────────────────────
+data/
+*.lic
+
 # ── Entorno local (nunca versionar secretos) ────────────────────
 .env
 .env.*

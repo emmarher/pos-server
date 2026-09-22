@@ -8,7 +8,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "npm run build:keys && tsx watch src/server.ts",
+    "build:keys": "node scripts/generatePublicKey.js",
+    "prebuild": "npm run build:keys",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",

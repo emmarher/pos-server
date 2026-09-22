@@ -10,6 +10,11 @@ data/
 *.sqlite
 *.sqlite3
 *.db
+*.lic
+
+# ── Clave pública embebida + privada de test ────────────────────
+src/keys/
+tests/test-private.pem
 
 # ── Entorno y secretos ─────────────────────────────────────────
 .env

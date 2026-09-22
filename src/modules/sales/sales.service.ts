@@ -31,6 +31,7 @@
 import { env } from '../../config/env.js'
 import { db } from '../../database/client.js'
 import { HttpError } from '../../types/errors.js'
+import { checkAntiRollback, updateAntiRollbackCounter } from '../license/license.service.js'
 import type {
   CreateSalePayload,
   SaleDetail,
@@ -256,7 +257,27 @@ export async function createSale(
      con INSUFFICIENT_STOCK (422) en lugar de un error de constraint (500). */
   try {
     return await db.transaction(async (tx) => {
-    /* 2) Folio dentro de la transacción (único por tenant+prefix). */
+    /* 2) Anti-rollback (checklist paso 6): detecta retroceso de reloj
+       o manipulación de BD antes de permitir la venta. Si la gracia de
+       7 días expiró → HttpError (bloquea venta). Si sigue en gracia →
+       permite con log. */
+    const rollbackCheck = await checkAntiRollback(tenant_id, tx)
+    if (rollbackCheck.rollbackDetected && !rollbackCheck.inGracePeriod) {
+      console.error(
+        `[anti-rollback] venta bloqueada para tenant ${tenant_id}: retroceso de reloj o BPM manipulado`,
+      )
+      throw new HttpError(
+        'LICENSE_EXPIRED',
+        'Reloj del servidor manipulado. Contacte a soporte.',
+      )
+    }
+    if (rollbackCheck.rollbackDetected) {
+      console.warn(
+        `[anti-rollback] venta permitida en gracia (${rollbackCheck.graceExpiresAt}) para tenant ${tenant_id}`,
+      )
+    }
+
+    /* 3) Folio dentro de la transacción (único por tenant+prefix). */
     const folioNumber = await nextFolio(tx, tenant_id)
 
     /* 3-4) Precios y descuentos recalculados desde la BD. */
@@ -548,6 +569,9 @@ export async function createSale(
        VALUES ($1, $2, 'SALE', $3, 'ESC_POS', $4)`,
       [tenant_id, sale.id, ticket, new Date().toISOString()],
     )
+
+    /* 10) Anti-rollback: incrementa el contador tras venta exitosa */
+    await updateAntiRollbackCounter(tenant_id, new Date().toISOString(), tx)
 
     /* 8-10) QoS: el trigger ya creó el evento; se devuelve su id. */
     const { rows: qosRows } = await tx.query<QosRow>(

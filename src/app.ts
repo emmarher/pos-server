@@ -42,6 +42,7 @@ import { reportsRoutes } from './modules/reports/reports.routes.js'
 import { printRoutes } from './modules/print/print.routes.js'
 import { scaleRoutes } from './modules/scale/scale.routes.js'
 import { qosRoutes } from './modules/qos/qos.routes.js'
+import { licenseRoutes } from './modules/license/license.routes.js'
 import { registerDiscoveryRoutes } from './services/udp-discovery.js'
 import { HttpError } from './types/errors.js'
 import {
@@ -147,6 +148,9 @@ export function buildApp(): FastifyInstance {
   void app.register(printRoutes)
   void app.register(scaleRoutes)
   void app.register(qosRoutes)
+
+  /* Rutas de licencia (upload, status, heartbeat) */
+  void app.register(licenseRoutes)
 
   /* Rutas de utilidad del descubrimiento UDP (status/config) */
   void app.register(registerDiscoveryRoutes)

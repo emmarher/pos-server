@@ -50,12 +50,16 @@ export const refreshBodySchema: ApiDataSchema = {
 /** Schema del objeto `license` dentro del data. */
 const licenseSchema: ApiDataSchema = {
   type: 'object',
-  required: ['status', 'expires_at', 'max_devices'],
+  required: ['status', 'expires_at', 'max_devices', 'lic_id', 'customer', 'features', 'warning_level'],
   additionalProperties: false,
   properties: {
     status: { enum: ['active', 'expired', 'grace'] },
     expires_at: { type: 'string' },
     max_devices: { type: 'integer' },
+    lic_id: { type: ['string', 'null'] },
+    customer: { type: ['string', 'null'] },
+    features: { type: 'array', items: { type: 'string' } },
+    warning_level: { enum: ['none', 'warning', 'critical', null] },
   },
 }
 

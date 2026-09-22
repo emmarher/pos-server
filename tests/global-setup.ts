@@ -8,7 +8,9 @@
  *   globalSetup corre en su propio proceso).
  * ────────────────────────────────────────────────────────────────────────
  */
-import { rmSync } from 'node:fs'
+import { rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { generateKeyPairSync } from 'node:crypto'
+import { resolve } from 'node:path'
 
 async function setup(): Promise<void> {
   process.env.DB_PROVIDER = 'sqlite'
@@ -22,6 +24,26 @@ async function setup(): Promise<void> {
   process.env.S3_BUCKET = 'productos'
   process.env.S3_PUBLIC_URL = 'http://127.0.0.1:3902'
   process.env.S3_MAX_FILE_SIZE_MB = '5'
+
+  /* ── Generar par de claves Ed25519 para tests de licencias ───────────── */
+  // El private key se guarda en tests/test-private.pem para firmar .lic de prueba.
+  // El public key se embebe en src/keys/publicKey.ts (gitignored).
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+  writeFileSync(
+    resolve('tests/test-private.pem'),
+    privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  )
+  writeFileSync(
+    resolve('../tools/keys/test-public.pem'),
+    publicKey.export({ type: 'spki', format: 'pem' }),
+  )
+  // Regenerar publicKey.ts con la clave de test
+  const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' })
+  mkdirSync(resolve('../tools/keys'), { recursive: true })
+  writeFileSync(
+    resolve('src/keys/publicKey.ts'),
+    `/* AUTOGENERADO — no editar. Tests usan clave Ed25519 de prueba. */\nexport const PUBLIC_KEY_PEM = \`${publicKeyPem}\`;\n`,
+  )
 
   rmSync('./data/pos-test.sqlite', { force: true })
   rmSync('./data/pos-test.sqlite-journal', { force: true })

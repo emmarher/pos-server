@@ -29,6 +29,10 @@ import bcrypt from 'bcryptjs'
 import type { FastifyInstance } from 'fastify'
 import { env } from '../../config/env.js'
 import { db } from '../../database/client.js'
+import {
+  getLicenseStatus,
+  checkExpiryWarnings,
+} from '../license/license.service.js'
 import type { AuthResponse, AuthJwtPayload } from '../../types/auth.js'
 import { HttpError } from '../../types/errors.js'
 
@@ -188,9 +192,10 @@ export async function login(
     permissions: [],
   })
 
+  const isHeartbeatExempt = roleName === 'Administrador' ? 1 : 0
   await db.query(
-    `INSERT INTO active_sessions (tenant_id, device_id, user_id, jwt_token_hash, expires_at, ip_address, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    `INSERT INTO active_sessions (tenant_id, device_id, user_id, jwt_token_hash, expires_at, ip_address, updated_at, last_heartbeat_at, is_heartbeat_exempt)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       tenant.id,
       deviceId,
@@ -199,11 +204,24 @@ export async function login(
       new Date(now.getTime() + REFRESH_EXPIRES_IN * 1000).toISOString(),
       null,
       nowIso,
+      nowIso,
+      isHeartbeatExempt,
     ],
   )
 
   /* 8) Configuración del tenant para la app (RF-AU-002) */
   const tenantInfo = await loadTenantInfo(tenant.id)
+
+  /* Enriquecer license con datos de license_state (lic_id, customer, features)
+     y warning_level de vencimiento (30/7 días). */
+  const licenseInfo = await getLicenseStatus(tenant.id)
+  const isLicenseExpired = licenseStatus(tenant, now) !== 'active'
+  const enrichedLicense = {
+    lic_id: licenseInfo.lic_id ?? null,
+    customer: licenseInfo.customer ?? null,
+    features: licenseInfo.features ?? [],
+    warning_level: isLicenseExpired ? null : checkExpiryWarnings(tenant.license_expires_at),
+  }
 
   return {
     access_token: accessToken,
@@ -230,6 +248,7 @@ export async function login(
       status: licenseStatus(tenant, now),
       expires_at: tenant.license_expires_at,
       max_devices: tenant.max_devices,
+      ...enrichedLicense,
     },
   }
 }
@@ -293,9 +312,10 @@ export async function refresh(
     permissions: [],
   })
   const nowIso = new Date().toISOString()
+  const isExemptRefresh = payload.role_name === 'Administrador' ? 1 : 0
   await db.query(
-    `INSERT INTO active_sessions (tenant_id, device_id, user_id, jwt_token_hash, expires_at, ip_address, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    `INSERT INTO active_sessions (tenant_id, device_id, user_id, jwt_token_hash, expires_at, ip_address, updated_at, last_heartbeat_at, is_heartbeat_exempt)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       payload.tenant_id,
       payload.device_id,
@@ -304,6 +324,8 @@ export async function refresh(
       new Date(Date.now() + REFRESH_EXPIRES_IN * 1000).toISOString(),
       null,
       nowIso,
+      nowIso,
+      isExemptRefresh,
     ],
   )
 
@@ -316,6 +338,8 @@ export async function refresh(
   )
   const user = userRows.rows[0]
 
+  /* Enriquecer license con datos de license_state */
+  const licenseInfo = await getLicenseStatus(payload.tenant_id)
   return {
     access_token: newAccess,
     refresh_token: newRefresh,
@@ -338,9 +362,13 @@ export async function refresh(
       can_scale: false,
     },
     license: {
-      status: 'active',
+      status: 'active', // refresh implica licencia válida (ya se verificó arriba)
       expires_at: tenant.license_expires_at,
-      max_devices: 0,
+      max_devices: licenseInfo.max_devices,
+      lic_id: licenseInfo.lic_id ?? null,
+      customer: licenseInfo.customer ?? null,
+      features: licenseInfo.features,
+      warning_level: licenseInfo.warning_level,
     },
   }
 }
