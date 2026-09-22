@@ -24,12 +24,17 @@ const serverRoot = path.resolve(__dirnameESM, '..')
 const outputPath = path.join(serverRoot, 'src', 'keys', 'publicKey.ts')
 
 function main() {
-  // Clave pública: env var > ruta default (relativa a pos-server)
-  const pemPath = process.env.PUBLIC_KEY_PATH
+  // Claves públicas: main + trial (familias aisladas). Trial es solo para licencias trial 1d.
+  const mainPemPath = process.env.PUBLIC_KEY_PATH
     ? path.resolve(process.cwd(), process.env.PUBLIC_KEY_PATH)
     : path.resolve(serverRoot, '../tools/keys/mipos_public.pem')
+  const trialPemPath = process.env.TRIAL_PUBLIC_KEY_PATH
+    ? path.resolve(process.cwd(), process.env.TRIAL_PUBLIC_KEY_PATH)
+    : path.resolve(serverRoot, '../tools/keys/trial_public.pem')
 
-  const header = [
+  const trialOutputPath = path.join(serverRoot, 'src', 'keys', 'trialPublicKey.ts')
+
+  const mainHeader = [
     '/**',
     ' * src/keys/publicKey.ts — Clave pública Ed25519 embebida en el build.',
     ' *',
@@ -40,39 +45,55 @@ function main() {
     '',
   ].join('\n')
 
-  if (!fs.existsSync(pemPath)) {
-    // En desarrollo sin claves: generar con clave vacía y loggear un warning.
-    // El servidor arrancará en modo degradado (no verificará firmas).
+  const trialHeader = [
+    '/**',
+    ' * src/keys/trialPublicKey.ts — Clave pública trial Ed25519 (familia aislada).',
+    ' *',
+    ' * AUTO-GENERATED por scripts/generatePublicKey.js — NO EDITAR A MANO.',
+    ' * Se genera en prebuild leyendo tools/keys/trial_public.pem.',
+    ' * Sirve solo para verificar licencias trial 1 día (POST /license/trial).',
+    ' * Rotar esta clave no impacta licencias productivas (familia main).',
+    ' */',
+    '',
+  ].join('\n')
+
+  // --- main ---
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+  if (!fs.existsSync(mainPemPath)) {
     const warning =
-      '\x1b[33m⚠  No se encontró la clave pública en ' + pemPath + '\x1b[0m\n' +
+      '\x1b[33m⚠  No se encontró la clave pública en ' + mainPemPath + '\x1b[0m\n' +
       '\x1b[33m   El server arrancará en modo degradado (no verificará firmas de licencias).\x1b[0m\n' +
       '\x1b[33m   Genera las claves con: node tools/generate-keys.js\x1b[0m\n' +
       '\x1b[33m   O configura PUBLIC_KEY_PATH en .env\x1b[0m\n'
     process.stderr.write(warning)
-
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true })
     fs.writeFileSync(
       outputPath,
-      header + 'export const PUBLIC_KEY_PEM = \'\'; // CLAVE FALTANTE — regenerar: npm run build:keys\n',
+      mainHeader + 'export const PUBLIC_KEY_PEM = \'\'; // CLAVE FALTANTE — regenerar: npm run build:keys\n',
       'utf8',
     )
     console.log('[generatePublicKey] ✓ Generado con clave vacía (modo degradado).')
-    return
+  } else {
+    const pem = fs.readFileSync(mainPemPath, 'utf8').trim()
+    const escaped = pem.replace(/\\/g, '\\\\').replace(/`/g, '\\`')
+    fs.writeFileSync(outputPath, mainHeader + `export const PUBLIC_KEY_PEM = \`${escaped}\`\n`, 'utf8')
+    console.log('[generatePublicKey] ✓ src/keys/publicKey.ts generado desde ' + mainPemPath)
   }
 
-  const pem = fs.readFileSync(pemPath, 'utf8').trim()
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
-
-  // Escapar backticks y backslashes dentro del PEM (defensivo para templates literales)
-  const escaped = pem.replace(/\\/g, '\\\\').replace(/`/g, '\\`')
-
-  fs.writeFileSync(
-    outputPath,
-    header + `export const PUBLIC_KEY_PEM = \`${escaped}\`\n`,
-    'utf8',
-  )
-
-  console.log('[generatePublicKey] ✓ src/keys/publicKey.ts generado desde ' + pemPath)
+  // --- trial (familia aislada, opcional en dev) ---
+  fs.mkdirSync(path.dirname(trialOutputPath), { recursive: true })
+  if (!fs.existsSync(trialPemPath)) {
+    fs.writeFileSync(
+      trialOutputPath,
+      trialHeader + 'export const TRIAL_PUBLIC_KEY_PEM = \'\'; // TRIAL clave faltante — generar: node tools/generate-trial-keys.js\n',
+      'utf8',
+    )
+    console.log('[generatePublicKey]   trial: clave faltante → trialPublicKey.ts vacío (trial no verificable).')
+  } else {
+    const pem = fs.readFileSync(trialPemPath, 'utf8').trim()
+    const escaped = pem.replace(/\\/g, '\\\\').replace(/`/g, '\\`')
+    fs.writeFileSync(trialOutputPath, trialHeader + `export const TRIAL_PUBLIC_KEY_PEM = \`${escaped}\`\n`, 'utf8')
+    console.log('[generatePublicKey] ✓ src/keys/trialPublicKey.ts generado desde ' + trialPemPath)
+  }
 }
 
 main()

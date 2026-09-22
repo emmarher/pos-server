@@ -7,6 +7,7 @@ dist/
 
 # ── Clave pública embebida (generada por scripts/generatePublicKey.js) ─
 src/keys/publicKey.ts
+src/keys/trialPublicKey.ts
 
 # ── Clave privada de test (generada por tests/global-setup.ts) ─
 tests/test-private.pem

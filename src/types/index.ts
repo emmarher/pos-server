@@ -34,8 +34,10 @@ export type ErrorCode =
   | 'LICENSE_EXPIRED' // licencia vencida → bloqueo total
   | 'DEVICE_LIMIT' // se superó max_devices del tenant (403)
   | 'NOT_FOUND' // recurso inexistente
+  | 'NO_LICENSE' // sin licencia (wizard bootstrap)
   | 'CONFLICT' // conflicto de unicidad (barcode, folio, etc.)
   | 'VALIDATION_ERROR' // body/query inválido
+  | 'VALIDATION' // alias validación (compatibilidad)
   | 'INSUFFICIENT_STOCK' // stock insuficiente al vender
   | 'TENANT_MISMATCH' // recurso de otro tenant (aislamiento)
   | 'INTERNAL' // error inesperado

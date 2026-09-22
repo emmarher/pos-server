@@ -33,11 +33,13 @@ function statusFor(code: ErrorCode): number {
     case 'DEVICE_LIMIT':
       return 403
     case 'NOT_FOUND':
+    case 'NO_LICENSE':
       return 404
     case 'CONFLICT':
     case 'TENANT_MISMATCH':
       return 409
     case 'VALIDATION_ERROR':
+    case 'VALIDATION':
       return 400
     case 'INSUFFICIENT_STOCK':
       return 422

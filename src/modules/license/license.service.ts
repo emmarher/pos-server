@@ -28,9 +28,9 @@
  * middleware authenticate continúan leyendo de la BD como siempre.
  * ─────────────────────────────────────────────────────────────────────
  */
-import { verify, createHmac, createHash, createPublicKey } from 'node:crypto'
+import { verify, createHmac, createHash, createPublicKey, sign, createPrivateKey } from 'node:crypto'
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import type { FastifyInstance } from 'fastify'
@@ -38,6 +38,7 @@ import { env } from '../../config/env.js'
 import { db, type DbClient } from '../../database/client.js'
 import { HttpError } from '../../types/errors.js'
 import { PUBLIC_KEY_PEM } from '../../keys/publicKey.js'
+import { TRIAL_PUBLIC_KEY_PEM } from '../../keys/trialPublicKey.js'
 import type {
   LicensePayload,
   LicenseVerification,
@@ -51,6 +52,7 @@ import {
   FINGERPRINT_GRACE_DAYS,
   EXPIRY_WARNING_DAYS,
   EXPIRY_CRITICAL_DAYS,
+  TRIAL_LICENSE_DAYS,
 } from '../../types/license.js'
 
 /* ── Helpers internos ────────────────────────────────────────────── */
@@ -140,20 +142,30 @@ export function verifyLicenseSignature(
     return { valid: false, payload: null, error: 'Base64url decode error' }
   }
 
-  // Step 3: Verificar firma Ed25519 con la clave pública
-  const pem = publicKeyPem ?? PUBLIC_KEY_PEM
-  if (!pem) {
+  // Step 3: Verificar firma Ed25519. Prueba familia main y luego trial (aisladas).
+  const candidates: string[] = []
+  if (publicKeyPem) {
+    candidates.push(publicKeyPem)
+  } else {
+    if (PUBLIC_KEY_PEM) candidates.push(PUBLIC_KEY_PEM)
+    if (TRIAL_PUBLIC_KEY_PEM) candidates.push(TRIAL_PUBLIC_KEY_PEM)
+  }
+  if (candidates.length === 0) {
     return { valid: false, payload: null, error: 'No public key embedded' }
   }
 
-  let publicKey
-  try {
-    publicKey = createPublicKey({ key: pem, type: 'spki' })
-  } catch {
-    return { valid: false, payload: null, error: 'Invalid public key PEM' }
+  let isValid = false
+  for (const pem of candidates) {
+    try {
+      const publicKey = createPublicKey({ key: pem, type: 'spki' })
+      if (verify(null, data, publicKey, signature)) {
+        isValid = true
+        break
+      }
+    } catch {
+      // PEM inválido → probar siguiente candidato
+    }
   }
-
-  const isValid = verify(null, data, publicKey, signature)
   if (!isValid) {
     // NO revelar el error específico al cliente (regla crítica del PRD §3)
     return { valid: false, payload: null, error: 'Ed25519 signature verification failed' }
@@ -539,6 +551,146 @@ export function computeHardwareFingerprint(): string {
 
   // 3. Hash combinado (no revela la MAC directamente)
   return createHash('sha256').update(mac + ':' + machineId).digest('hex')
+}
+
+/* ── 8b) Bootstrap detection + Trial helpers ──────────────────────── */
+
+/**
+ * Detecta si el servidor está en modo bootstrap (sin licencia válida).
+ * Se usa en las rutas para permitir POST /license/upload|/trial sin JWT
+ * solo cuando realmente falta una licencia válida (evita bypass en prod).
+ */
+export async function isBootstrapNeeded(): Promise<boolean> {
+  const tenant = await getActiveTenant()
+  if (!tenant) return true
+  // Si la licencia ya está activa en BD, no es bootstrap
+  if (tenant.is_active === 1) {
+    const exp = new Date(tenant.license_expires_at).getTime()
+    if (Number.isFinite(exp) && exp > Date.now()) {
+      // Revisar license_state también (si falta pero tenant dice activo, aún no es bootstrap limpio)
+      const { rows } = await db.query<{ is_valid: number }>(
+        'SELECT is_valid FROM license_state WHERE tenant_id = $1',
+        [tenant.id],
+      )
+      if (rows[0]?.is_valid === 1) return false
+      // Sin state pero con file válido → bootstrap no necesario, dejar que validate lo resuelva
+      const lic = loadLicenseFile()
+      if (lic) {
+        const v = verifyLicenseSignature(lic)
+        if (v.valid) return false
+      }
+    }
+  }
+  return true
+}
+
+/** Resuelve la ruta al PEM privado trial (soporta ruta relativa a pos-server o absoluta). */
+function resolveTrialPrivatePath(): string {
+  const p = env.trialPrivateKeyPath?.trim()
+  if (!p) return resolve(dirname(env.licenseFilePath), '../tools/keys/trial_private.pem')
+  if (p.startsWith('/')) return p
+  // relativo a pos-server root (../../tools/keys/...)
+  // Si el proceso corre desde pos-server, resolver relativo a cwd; si es relativo tipo ../tools, va bien.
+  try {
+    const tryResolve = resolve(process.cwd(), p)
+    if (existsSync(tryResolve)) return tryResolve
+  } catch {}
+  return resolve(join(dirname(env.licenseFilePath), p))
+}
+
+function loadTrialPrivateKey() {
+  const candidates = [
+    resolveTrialPrivatePath(),
+    resolve(process.cwd(), '../tools/keys/trial_private.pem'),
+    resolve(process.cwd(), '../tools/keys/trial_private.enc.pem'),
+    join(dataDir(), 'trial_private.pem'),
+  ]
+  const tried: string[] = []
+  for (const p of candidates) {
+    tried.push(p)
+    if (!existsSync(p)) continue
+    try {
+      const pem = readFileSync(p, 'utf8')
+      if (pem.includes('ENCRYPTED')) {
+        const pass = env.trialPrivateKeyPassphrase
+        if (!pass) continue
+        return createPrivateKey({ key: pem, passphrase: pass })
+      }
+      return createPrivateKey({ key: pem })
+    } catch {
+      // passphrase incorrect o PEM corrupto → probar siguiente
+    }
+  }
+  throw new HttpError(
+    'FORBIDDEN',
+    `No se pudo cargar la clave trial privada (probado: ${tried.join(', ')}). Configure TRIAL_PRIVATE_KEY_PATH/TRIAL_PASS o genere con tools/generate-trial-keys.js`,
+  )
+}
+
+function signPayload(payload: LicensePayload, privateKey: ReturnType<typeof createPrivateKey>): string {
+  const data = Buffer.from(JSON.stringify(payload))
+  const sig = sign(null, data, privateKey)
+  return `${data.toString('base64url')}.${sig.toString('base64url')}`
+}
+
+/**
+ * Emite una licencia trial de 1 día firmada server-side (familia trial aislada).
+ * Usa el tenant activo; si ya existe una trial vigente no se re-emite dentro de 23h
+ * (previene abuso del endpoint sin bloquear el flujo del wizard).
+ */
+export async function issueTrialLicense(tenantId?: string): Promise<LicenseInfo> {
+  const tenant = tenantId
+    ? (await db.query<ActiveTenantRow>('SELECT id, license_key, name, is_active, license_expires_at, max_devices FROM tenants WHERE id = $1', [tenantId])).rows[0]
+    : await getActiveTenant()
+  if (!tenant) throw new HttpError('NOT_FOUND', 'No hay tenant para emitir trial')
+
+  // Throttle: si ya hay trial vigente (>12h restantes), no re-emitir (evita spam)
+  const { rows: lsRows } = await db.query<{ expires_at: string; lic_id: string }>(
+    'SELECT expires_at, lic_id FROM license_state WHERE tenant_id = $1',
+    [tenant.id],
+  )
+  const existing = lsRows[0]
+  if (existing?.lic_id?.startsWith('TRIAL-')) {
+    const leftMs = new Date(existing.expires_at).getTime() - Date.now()
+    if (leftMs > 12 * 60 * 60 * 1000) {
+      throw new HttpError('FORBIDDEN', 'Ya existe una licencia trial vigente. Espere a que expire para generar otra.')
+    }
+  }
+
+  const now = new Date()
+  const expires = new Date(now.getTime() + TRIAL_LICENSE_DAYS * 24 * 60 * 60 * 1000)
+  const payload: LicensePayload = {
+    schema: LICENSE_SCHEMA_VERSION,
+    lic_id: `TRIAL-${now.getFullYear()}-${String(Date.now()).slice(-6)}`,
+    license_key: tenant.license_key,
+    customer: tenant.name || 'Trial',
+    branch: 'trial',
+    seats: Math.max(tenant.max_devices, 2),
+    features: ['inventory', 'reports'],
+    issued: now.toISOString(),
+    expires: expires.toISOString(),
+    hw_fingerprint: null,
+  }
+
+  const privateKey = loadTrialPrivateKey()
+  const licContent = signPayload(payload, privateKey)
+
+  // Persistir archivo .lic en licenseFilePath para que validateLicenseAtStartup lo vea al reiniciar
+  try {
+    mkdirSync(dirname(env.licenseFilePath), { recursive: true })
+    writeFileSync(env.licenseFilePath, licContent, 'utf8')
+  } catch {
+    // No fatal — igual guardamos en BD
+  }
+
+  await db.transaction(async (tx) => {
+    await storeLicenseState(tx, tenant.id, payload, licContent, true)
+    await applyLicenseToTenant(tx, tenant.id, payload, true)
+    await initAntiRollback(tx, tenant.id, payload.lic_id)
+    await logLicenseAudit(tenant.id, 'TRIAL_ISSUED', `Trial ${payload.lic_id} expira ${payload.expires}`, 'INFO', tx)
+  })
+
+  return getLicenseStatus(tenant.id)
 }
 
 /* ── 9) Validación completa del checklist (8 pasos) ───────────────── */

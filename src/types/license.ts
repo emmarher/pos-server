@@ -24,6 +24,9 @@ export const HEARTBEAT_TTL_SECONDS = 90 as const
 export const EXPIRY_WARNING_DAYS = 30 as const
 export const EXPIRY_CRITICAL_DAYS = 7 as const
 
+/* Duración del trial autofirmado (1 día, familia aislada). */
+export const TRIAL_LICENSE_DAYS = 1 as const
+
 /** Payload decodificado del .lic (lo que está firmado). */
 export interface LicensePayload {
   /** Versión del formato (1 = Ed25519). */

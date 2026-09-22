@@ -91,6 +91,10 @@ export interface AppEnv {
   licenseStrict: boolean
   /** Secreto para HMAC anti-rollback (si no se fija, deriva de JWT_SECRET). */
   licenseHmacSecret: string
+  /** Ruta al PEM privado trial (para POST /license/trial — 1 día, familia aislada). */
+  trialPrivateKeyPath: string
+  /** Passphrase del privado trial (TRIAL_PASS / LIC_PASS, opcional si PEM sin cifrar). */
+  trialPrivateKeyPassphrase: string
 }
 
 /* ── 2) CARGA Y VALIDACIÓN ───────────────────────────────────────────── */
@@ -147,6 +151,12 @@ function loadEnv(): AppEnv {
       process.env.NODE_ENV === 'production',
     licenseHmacSecret:
       process.env.LICENSE_HMAC_SECRET?.trim() || process.env.JWT_SECRET?.trim() || jwtSecret,
+    trialPrivateKeyPath:
+      process.env.TRIAL_PRIVATE_KEY_PATH?.trim() ||
+      process.env.LICENSE_TRIAL_PRIVATE_KEY_PATH?.trim() ||
+      '../tools/keys/trial_private.pem',
+    trialPrivateKeyPassphrase:
+      process.env.TRIAL_PASS?.trim() || process.env.LIC_PASS?.trim() || '',
   }
 }
 
