@@ -28,6 +28,8 @@ async function setup(): Promise<void> {
   /* ── Generar par de claves Ed25519 para tests de licencias ───────────── */
   // El private key se guarda en tests/test-private.pem para firmar .lic de prueba.
   // El public key se embebe en src/keys/publicKey.ts (gitignored).
+  // NOTA: crear el dir ANTES de escribir (en entornos sin tools/keys previo fallaba con ENOENT).
+  mkdirSync(resolve('../tools/keys'), { recursive: true })
   const { privateKey, publicKey } = generateKeyPairSync('ed25519')
   writeFileSync(
     resolve('tests/test-private.pem'),
@@ -39,7 +41,6 @@ async function setup(): Promise<void> {
   )
   // Regenerar publicKey.ts con la clave de test
   const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' })
-  mkdirSync(resolve('../tools/keys'), { recursive: true })
   writeFileSync(
     resolve('src/keys/publicKey.ts'),
     `/* AUTOGENERADO — no editar. Tests usan clave Ed25519 de prueba. */\nexport const PUBLIC_KEY_PEM = \`${publicKeyPem}\`;\n`,
