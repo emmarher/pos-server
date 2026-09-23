@@ -4,6 +4,31 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — Integración Licencia Ed25519 (rama printer)
+
+### Añadido (del remoto origin/printer)
+
+- **Sistema de licencias firmadas Ed25519** (`c821a6c`): migración `006_license_signed`
+  (sqlite+pg: `license_state`, `license_anti_rollback`, `license_audit`, heartbeat en
+  `active_sessions`); módulo `src/modules/license/` (upload/status/heartbeat);
+  `license-monitor.ts`; `scripts/generatePublicKey.js` + `build:keys`/`prebuild`;
+  vars `LICENSE_FILE_PATH`, `PUBLIC_KEY_PATH`, `LICENSE_STRICT`, `LICENSE_HMAC_SECRET`.
+- **Wizard bootstrap + trial 1 día** (`b9eba05`): `POST /license/upload` sin auth en
+  bootstrap, `POST /license/trial` (familia de claves trial aislada),
+  `GET /license/status` público con 404 `NO_LICENSE`; error `NO_LICENSE` en tipos.
+- **Fix compat** (`9a3a404`): `engines` Node `^20.19.0||>=22.12.0`, enum auditoría `LOADED`.
+
+### Corregido (local)
+
+- `tests/global-setup.ts`: el `mkdirSync(tools/keys)` ahora corre antes de escribir
+  `test-public.pem` (antes fallaba con ENOENT en entornos sin ese dir).
+
+### Verificado
+
+- `npm run build:keys` OK (degradado sin claves reales), `typecheck` limpio,
+  migración `006` aplicada, `npm test` 20/20 (11 licencia + 9 imágenes),
+  smoke `GET /license/status` → 200 con licencia seed vigente.
+
 ## [0.7.1] — 2026-08-12 — Compilación reparada + UDP Discovery conectado (RF-DS)
 
 ### Añadido
