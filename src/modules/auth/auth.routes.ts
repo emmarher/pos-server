@@ -17,8 +17,14 @@
  */
 import type { FastifyInstance } from 'fastify'
 import { okEnvelope, okEnvelopeSchema } from '../../types/response.js'
-import { login, refresh } from './auth.service.js'
-import { authDataSchema, loginBodySchema, refreshBodySchema } from './auth.schema.js'
+import { changePin, login, refresh } from './auth.service.js'
+import {
+  authDataSchema,
+  changePinBodySchema,
+  changePinResultSchema,
+  loginBodySchema,
+  refreshBodySchema,
+} from './auth.schema.js'
 
 /** Plugin Fastify que registra las rutas de auth. */
 export function authRoutes(app: FastifyInstance): void {
@@ -43,6 +49,28 @@ export function authRoutes(app: FastifyInstance): void {
       }
       const data = await login(app, body)
       return okEnvelope(data, 'Inicio de sesión exitoso', 200)
+    },
+  )
+
+  /* ── POST /auth/change-pin (F-I2b: PIN inicial obligatorio, sin JWT) ── */
+  app.post(
+    '/auth/change-pin',
+    {
+      schema: {
+        body: changePinBodySchema,
+        response: {
+          200: okEnvelopeSchema(changePinResultSchema),
+        },
+      },
+    },
+    async (request) => {
+      const body = request.body as {
+        tenant_code: string
+        pin: string
+        new_pin: string
+      }
+      const data = await changePin(body)
+      return okEnvelope(data, 'PIN actualizado. Inicia sesión con tu nuevo PIN.', 200)
     },
   )
 

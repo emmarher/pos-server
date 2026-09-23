@@ -224,6 +224,7 @@ function statusFor(code: ErrorCode): number {
     case 'FORBIDDEN':
     case 'LICENSE_EXPIRED':
     case 'DEVICE_LIMIT':
+    case 'MUST_CHANGE_PIN':
       return 403
     case 'NOT_FOUND':
       return 404

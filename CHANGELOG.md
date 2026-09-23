@@ -4,6 +4,30 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — F-I2b installer: PIN inicial obligatorio (rama installer)
+
+### Añadido
+
+- **Migración `007_must_change_pin`** (sqlite+pg): `users.must_change_pin`
+  (default 0; filas existentes intactas).
+- **`POST /auth/change-pin`** (sin JWT): valida tenant+PIN actual, exige PIN
+  nuevo 4-6 dígitos distinto, limpia el flag. Sin tokens (se reintenta login).
+- **Login bloquea con 403 `MUST_CHANGE_PIN`** ("Debes cambiar tu PIN inicial…")
+  cuando el flag está en 1 — antes de límite de dispositivos y tokens.
+- **Seed**: `SEED_DEMO_MUST_CHANGE_PIN` (default 1; tests lo fijan en 0 en
+  `setup-env.ts` **y** `global-setup.ts` — este último corre en proceso aparte
+  y no hereda el primero). Instalaciones frescas fuerzan cambio de 1234/5678.
+- **Tests `auth-pin.test.ts`** (6 casos, tenant fixture propio con clave única:
+  los suites corren en paralelo sobre la misma BD y mutar DEMO tumbaba a
+  products.image). Suite total: 26/26.
+- **Instalador**: `[Run]` del `.iss` también ejecuta `seed-catalog.js`
+  (catálogo demo en instalación fresca, decisión producto).
+
+### Corregido
+
+- `src/types/errors.ts`: tabla espejo `statusFor` suma `MUST_CHANGE_PIN` → 403
+  (es la que manda para `HttpError`; sin esto caía a 500).
+
 ## [Sin publicar] — F-I2 installer: wizard Inno + .env + scripts (rama installer)
 
 ### Añadido

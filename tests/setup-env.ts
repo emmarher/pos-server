@@ -23,3 +23,7 @@ process.env.S3_SECRET_ACCESS_KEY = 'test-secret-key'
 process.env.S3_BUCKET = 'productos'
 process.env.S3_PUBLIC_URL = 'http://127.0.0.1:3902'
 process.env.S3_MAX_FILE_SIZE_MB = '5'
+
+/* Seed demo SIN pin forzado: los helpers hacen login directo con 1234/5678.
+   El flujo MUST_CHANGE_PIN se prueba dedicado en tests/auth-pin.test.ts. */
+process.env.SEED_DEMO_MUST_CHANGE_PIN = '0'

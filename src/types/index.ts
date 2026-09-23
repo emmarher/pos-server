@@ -33,6 +33,7 @@ export type ErrorCode =
   | 'FORBIDDEN' // sin permiso para la acción
   | 'LICENSE_EXPIRED' // licencia vencida → bloqueo total
   | 'DEVICE_LIMIT' // se superó max_devices del tenant (403)
+  | 'MUST_CHANGE_PIN' // PIN inicial obligatorio → POST /auth/change-pin (403)
   | 'NOT_FOUND' // recurso inexistente
   | 'NO_LICENSE' // sin licencia (wizard bootstrap)
   | 'CONFLICT' // conflicto de unicidad (barcode, folio, etc.)

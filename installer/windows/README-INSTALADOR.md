@@ -31,6 +31,13 @@ desktop aparece el **wizard de activación**.
 Renovación/ampliar asientos: el proveedor te envía un `.lic` nuevo → súbelo desde
 un admin o repite el wizard (sin reinstalar nada).
 
+## 3b) Primer login: cambiar PIN inicial (obligatorio)
+
+Los usuarios demo nacen con PIN `1234` (admin) / `5678` (vendedor) marcados como
+**iniciales**: el login los rechaza con *"Debes cambiar tu PIN inicial"* hasta
+crear uno nuevo de 4-6 dígitos en la misma pantalla. Hazlo antes de operar;
+nadie debe vender con los PINs de fábrica.
+
 ## 4) Operación diaria
 
 - **Iniciar/Detener**: accesos del menú inicio (fondo = sin ventana).

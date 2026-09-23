@@ -68,6 +68,8 @@ Name: "{userstartup}\POS Server"; Filename: "{app}\bin\start-server.vbs"
 ; Si falla, el operador ve el error de assertSchemaReady en el log del server.
 Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\migrate.js"; WorkingDir: "{app}"; StatusMsg: "Aplicando migraciones de base de datos..."; Flags: runhidden waituntilterminated
 Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\seed.js"; WorkingDir: "{app}"; StatusMsg: "Creando datos iniciales..."; Flags: runhidden waituntilterminated
+; Catálogo demo (productos demo para vender de inmediato — decisión producto F-I2b)
+Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\seed-catalog.js"; WorkingDir: "{app}"; StatusMsg: "Cargando catálogo demo..."; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
 Type: files; Name: "{app}\.env"

@@ -52,6 +52,8 @@ interface UserRow {
   name: string
   pin_hash: string | null
   is_active: number
+  /** 1 = debe cambiar su PIN inicial antes de operar (F-I2b instalador). */
+  must_change_pin: number | null
 }
 
 /* ── Constantes ───────────────────────────────────────────────────────── */
@@ -121,12 +123,21 @@ export async function login(
 
   /* 3) PIN del usuario (4-6 dígitos, hash bcrypt) */
   const userRows = await db.query<UserRow>(
-    'SELECT id, name, pin_hash, is_active FROM users WHERE tenant_id = $1 AND is_active = 1',
+    'SELECT id, name, pin_hash, is_active, must_change_pin FROM users WHERE tenant_id = $1 AND is_active = 1',
     [tenant.id],
   )
   const user = userRows.rows.find((u) => u.pin_hash && bcrypt.compareSync(input.pin, u.pin_hash))
   if (!user) {
     throw new HttpError('UNAUTHORIZED', 'Código de tenant o PIN incorrecto')
+  }
+
+  /* 3b) PIN inicial obligatorio (F-I2b): el seed deja PINs 1234/5678 con
+     must_change_pin=1; no se emiten tokens hasta cambiarlo vía changePin. */
+  if (user.must_change_pin === 1) {
+    throw new HttpError(
+      'MUST_CHANGE_PIN',
+      'Debes cambiar tu PIN inicial antes de operar.',
+    )
   }
 
   /* 4) Límite de dispositivos (RF-AU-004) */
@@ -251,6 +262,58 @@ export async function login(
       ...enrichedLicense,
     },
   }
+}
+
+/* ── Cambio de PIN inicial (F-I2b) ─────────────────────────────────────── */
+
+export interface ChangePinInput {
+  tenant_code: string
+  /** PIN actual (valida identidad sin JWT: el usuario aún no puede loguearse). */
+  pin: string
+  /** PIN nuevo (4-6 dígitos, distinto del actual). */
+  new_pin: string
+}
+
+/**
+ * POST /auth/change-pin. Sin JWT a propósito: se usa justo cuando el login
+ * está bloqueado por MUST_CHANGE_PIN. Valida tenant + PIN actual, exige PIN
+ * nuevo distinto y limpia must_change_pin. NO emite tokens (el cliente
+ * reintenta /auth/login después).
+ */
+export async function changePin(input: ChangePinInput): Promise<{ changed: true }> {
+  const tenantRows = await db.query<TenantRow>(
+    'SELECT id, name, license_key, license_expires_at, max_devices, is_active FROM tenants WHERE license_key = $1',
+    [input.tenant_code.trim()],
+  )
+  const tenant = tenantRows.rows[0]
+  if (!tenant) {
+    // No revelar si el tenant existe: mismo mensaje que login.
+    throw new HttpError('UNAUTHORIZED', 'Código de tenant o PIN incorrecto')
+  }
+
+  const userRows = await db.query<UserRow>(
+    'SELECT id, name, pin_hash, is_active, must_change_pin FROM users WHERE tenant_id = $1 AND is_active = 1',
+    [tenant.id],
+  )
+  const user = userRows.rows.find((u) => u.pin_hash && bcrypt.compareSync(input.pin, u.pin_hash))
+  if (!user) {
+    throw new HttpError('UNAUTHORIZED', 'Código de tenant o PIN incorrecto')
+  }
+
+  if (!/^[0-9]{4,6}$/.test(input.new_pin)) {
+    throw new HttpError('VALIDATION_ERROR', 'El PIN nuevo debe tener 4 a 6 dígitos')
+  }
+  if (bcrypt.compareSync(input.new_pin, user.pin_hash as string)) {
+    throw new HttpError('VALIDATION_ERROR', 'El PIN nuevo debe ser distinto del actual')
+  }
+
+  const nowIso = new Date().toISOString()
+  await db.query(
+    `UPDATE users SET pin_hash = $3, must_change_pin = 0, updated_at = $4
+     WHERE tenant_id = $1 AND id = $2`,
+    [tenant.id, user.id, bcrypt.hashSync(input.new_pin, 10), nowIso],
+  )
+  return { changed: true as const }
 }
 
 /* ── Refresh ──────────────────────────────────────────────────────────── */

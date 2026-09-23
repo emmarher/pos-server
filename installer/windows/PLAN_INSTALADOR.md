@@ -77,8 +77,9 @@ Puertos (ver `README.md` + `src/server.ts`):
      `IMAGES_ENABLED=false`).
   3. Firewall: `netsh advfirewall firewall add rule` → TCP 3000 inbound (perfil privado)
      + UDP 5000 inbound (discovery).
-  4. Migrar + seed: `node.exe dist\...\migrate.js && seed.js`
-     (comandos `npm run migrate / seed`, `package.json:16-18`).
+  4. Migrar + seed: `node.exe dist\...\migrate.js && seed.js && seed-catalog.js`
+     (comandos `npm run migrate / seed / seed:catalog`, `package.json:16-20`).
+     seed-catalog deja catálogo demo (decisión producto F-I2b).
      Si falla, mostrar el mensaje de `src/server.ts:assertSchemaReady`
      ("Ejecuta: npm run migrate && npm run seed").
   5. Accesos menú inicio: Iniciar / Detener / Salud / Backup / Desinstalar.

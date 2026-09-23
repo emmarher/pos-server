@@ -166,16 +166,21 @@ export async function seedDemo(): Promise<void> {
     /* 6) Usuarios + roles asignados */
     const adminHash = bcrypt.hashSync(ADMIN_PIN, 10)
     const vendedorHash = bcrypt.hashSync(VENDEDOR_PIN, 10)
+    // PIN inicial obligatorio: 1 = forzar cambio en el próximo login
+    // (instalaciones frescas no deben operar con PINs 1234/5678).
+    // Tests lo fijan en 0 vía SEED_DEMO_MUST_CHANGE_PIN (ver tests/setup-env.ts).
+    const mustChangePin =
+      (process.env.SEED_DEMO_MUST_CHANGE_PIN ?? '1').trim() === '0' ? 0 : 1
 
     await tx.query(
-      `INSERT INTO users (tenant_id, name, pin_hash, email, is_active, created_at, updated_at)
-       VALUES ($1, 'Administrador', $2, 'admin@demo.local', 1, $3, $3)`,
-      [tenantId, adminHash, nowIso],
+      `INSERT INTO users (tenant_id, name, pin_hash, email, is_active, must_change_pin, created_at, updated_at)
+       VALUES ($1, 'Administrador', $2, 'admin@demo.local', 1, $3, $4, $4)`,
+      [tenantId, adminHash, mustChangePin, nowIso],
     )
     await tx.query(
-      `INSERT INTO users (tenant_id, name, pin_hash, email, is_active, created_at, updated_at)
-       VALUES ($1, 'Vendedor', $2, 'vendedor@demo.local', 1, $3, $3)`,
-      [tenantId, vendedorHash, nowIso],
+      `INSERT INTO users (tenant_id, name, pin_hash, email, is_active, must_change_pin, created_at, updated_at)
+       VALUES ($1, 'Vendedor', $2, 'vendedor@demo.local', 1, $3, $4, $4)`,
+      [tenantId, vendedorHash, mustChangePin, nowIso],
     )
     const userRows = await tx.query<{ id: string; name: string }>(
       'SELECT id, name FROM users WHERE tenant_id = $1',

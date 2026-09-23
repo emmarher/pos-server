@@ -24,6 +24,9 @@ async function setup(): Promise<void> {
   process.env.S3_BUCKET = 'productos'
   process.env.S3_PUBLIC_URL = 'http://127.0.0.1:3902'
   process.env.S3_MAX_FILE_SIZE_MB = '5'
+  // Seed demo SIN pin forzado: globalSetup corre en proceso aparte y NO hereda
+  // setup-env.ts; sin esto, seedDemo usa el default '1' y rompe los logins helper.
+  process.env.SEED_DEMO_MUST_CHANGE_PIN = '0'
 
   /* ── Generar par de claves Ed25519 para tests de licencias ───────────── */
   // El private key se guarda en tests/test-private.pem para firmar .lic de prueba.

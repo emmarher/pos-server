@@ -45,6 +45,29 @@ export const refreshBodySchema: ApiDataSchema = {
   },
 }
 
+/* ── Body de POST /auth/change-pin (F-I2b: PIN inicial obligatorio) ────── */
+
+export const changePinBodySchema: ApiDataSchema = {
+  type: 'object',
+  required: ['tenant_code', 'pin', 'new_pin'],
+  additionalProperties: false,
+  properties: {
+    tenant_code: { type: 'string', minLength: 1, maxLength: 255 },
+    pin: { type: 'string', minLength: 4, maxLength: 6, pattern: '^[0-9]{4,6}$' },
+    new_pin: { type: 'string', minLength: 4, maxLength: 6, pattern: '^[0-9]{4,6}$' },
+  },
+}
+
+/** Respuesta `{ changed: true }` de POST /auth/change-pin. */
+export const changePinResultSchema: ApiDataSchema = {
+  type: 'object',
+  required: ['changed'],
+  additionalProperties: false,
+  properties: {
+    changed: { type: 'boolean' },
+  },
+}
+
 /* ── Schemas de data de respuesta (login y refresh comparten shape) ───── */
 
 /** Schema del objeto `license` dentro del data. */
