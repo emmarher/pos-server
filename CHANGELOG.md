@@ -4,6 +4,17 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — F-I1 installer: seed demo con vigencia configurable (rama installer)
+
+### Añadido
+
+- **`SEED_DEMO_LICENSE_DAYS`** (default 365, dev/tests intactos): días de vigencia
+  de la licencia del tenant demo al sembrar. El instalador prod la fijará en 0
+  para que la instalación fresca nazca vencida → `/license/status` reporta
+  `expired` → el wizard de activación aparece en vez de operar sin `.lic`.
+  Verificado con BD temporal: `SEED_DEMO_LICENSE_DAYS=0` deja `DEMO-0001`
+  ya vencida. Documentado en `.env.example`.
+
 ## [Sin publicar] — Integración Licencia Ed25519 (rama printer)
 
 ### Añadido (del remoto origin/printer)

@@ -59,8 +59,14 @@ export async function seedDemo(): Promise<void> {
   }
 
   const nowIso = new Date().toISOString()
-  // Licencia válida 1 año a partir de hoy (pruebas)
-  const expiresAt = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString()
+  // Vigencia de la licencia demo (días). Default 365 (dev/tests).
+  // El instalador prod la fija en 0 o negativo para que una instalación fresca
+  // quede en bootstrap (wizard de activación) en vez de "activa" sin .lic.
+  // Variable leída directo de process.env para no acoplar el seed al loader env.
+  const demoDays = Number(process.env.SEED_DEMO_LICENSE_DAYS ?? 365)
+  const expiresAt = new Date(
+    Date.now() + (Number.isFinite(demoDays) ? demoDays : 365) * 24 * 3600 * 1000,
+  ).toISOString()
 
   await db.transaction(async (tx) => {
     /* 1) Tenant + settings */
