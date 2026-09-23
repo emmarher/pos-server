@@ -687,7 +687,7 @@ export async function issueTrialLicense(tenantId?: string): Promise<LicenseInfo>
     await storeLicenseState(tx, tenant.id, payload, licContent, true)
     await applyLicenseToTenant(tx, tenant.id, payload, true)
     await initAntiRollback(tx, tenant.id, payload.lic_id)
-    await logLicenseAudit(tenant.id, 'TRIAL_ISSUED', `Trial ${payload.lic_id} expira ${payload.expires}`, 'INFO', tx)
+    await logLicenseAudit(tenant.id, 'LOADED', `Trial ${payload.lic_id} expira ${payload.expires}`, 'INFO', tx)
   })
 
   return getLicenseStatus(tenant.id)
