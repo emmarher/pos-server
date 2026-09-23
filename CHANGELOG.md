@@ -4,6 +4,38 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — F-I2 installer: wizard Inno + .env + scripts (rama installer)
+
+### Añadido
+
+- **`installer/windows/pos-server.iss`** (Inno Setup 6): instala a
+  `C:\Program Files\POS Server` (requiere admin), datos en
+  `%ProgramData%\POS Server\{data,backups}`; página wizard de puerto API;
+  genera `JWT_SECRET` + `LICENSE_HMAC_SECRET` (64-hex vía node portable);
+  escribe `.env` desde `env.template`; firewall privado TCP API + UDP 5000;
+  corre migrate+seed; accesos Inicio + auto-arranque Startup (`.vbs` sin ventana);
+  al desinstalar limpia firewall y conserva `%ProgramData%`.
+- **`installer/windows/env.template`**: fija prod (`LICENSE_STRICT=true`,
+  `IMAGES_ENABLED=false`, `SEED_DEMO_LICENSE_DAYS=0`, rutas ProgramData).
+- **`installer/windows/bin/`**: `start-server.bat/.vbs`, `stop-server.bat`,
+  `backup.bat` (sqlite+WAL fechado), `healthcheck.bat`.
+- **`installer/windows/README-INSTALADOR.md`**: manual tienda (instalar, activar
+  `.lic`, operar, respaldo/restaurar, reinstalar, troubleshooting).
+- `.gitignore`: `installer/stage/`, `installer/output/`, `installer/windows/node/`, `*.exe`.
+
+### Verificado (simulación de instalado, sin Inno)
+
+- Template→`.env` sin marcas restantes; `dist/` reconstruido (estaba
+  pre-licencia y `/license/*` daba 404 genérico).
+- Server real con ese `.env` (puerto 3444, BD temporal): `/health` 200 db up;
+  `/license/status` → `expired` (seed nació vencido); login → 403
+  "Licencia vencida". El flujo bootstrap→wizard queda probado.
+
+### Pendiente
+
+- Node portable v22.12.0 en `installer/stage/node/` + `iscc pos-server.iss`
+  (requiere Inno Setup 6; no instalado aquí) + checklist VM limpia (§4 del plan).
+
 ## [Sin publicar] — F-I1 installer: seed demo con vigencia configurable (rama installer)
 
 ### Añadido

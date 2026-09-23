@@ -36,3 +36,9 @@ npm-debug.log*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# ── Instalador Windows (artefactos locales, ver installer/windows/) ──
+installer/stage/
+installer/output/
+installer/windows/node/
+*.exe

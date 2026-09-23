@@ -117,7 +117,9 @@ installer/windows/node/
 
 ## 6. Estado actual / pendientes
 - [x] Plan acordado y guardado (este archivo).
-- [ ] `pos-server.iss` + `env.template` + `bin/*.bat|vbs`.
-- [ ] `README-INSTALADOR.md` (manual tienda: instalar, firewall, backup, reinstalar).
-- [ ] Entrada `.gitignore` para `stage/output/node/*.exe`.
-- [ ] Build de prueba + checklist VM limpia.
+- [x] `pos-server.iss` + `env.template` + `bin/*.bat|vbs` (rama `installer`, F-I2).
+- [x] `README-INSTALADOR.md` (manual tienda: instalar, firewall, backup, reinstalar).
+- [x] Entrada `.gitignore` para `stage/output/node/*.exe`.
+- [ ] Node portable v22.12.0 descargado a `installer/stage/node/` (manual, ~30MB).
+- [ ] `iscc pos-server.iss` compila sin errores (requiere Inno Setup 6 en la máquina de release).
+- [ ] Build de prueba + checklist VM limpia (§4).
