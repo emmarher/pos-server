@@ -1,0 +1,20 @@
+# installer/windows/garage/garage.toml.template — Garage single-node sucursal.
+#
+# El instalador sustituye {{RPC_SECRET}} por 64-hex aleatorio.
+# Rutas internas del contenedor (fijas); los datos viven en volúmenes
+# mapeados a %ProgramData%\POS Server\garage\{data,meta} vía compose.
+# single-node: replication_factor=1, db sqlite. Solo API S3 en localhost.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+replication_factor = 1
+
+rpc_bind_addr = "127.0.0.1:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "{{RPC_SECRET}}"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "127.0.0.1:3900"
+root_domain = ".s3.garage.localhost"

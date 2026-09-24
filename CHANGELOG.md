@@ -4,6 +4,31 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — G2/G3 instalador: Garage opcional vía Docker (rama installer)
+
+### Añadido
+
+- **`installer/windows/garage/`**: `docker-compose.yml` (solo `127.0.0.1:3900`,
+  volúmenes a ProgramData vía `.env` del compose, `restart: unless-stopped`) +
+  `garage.toml.template` single-node (rpc_secret por instalador).
+- **`bin/garage-init.{bat,ps1}`** idempotente: levanta contenedor, espera :3900,
+  layout v1 si versión=0 (parsea node ID de `status`), crea bucket `pos-images`
+  si falta, reutiliza o crea key `pos-server` (`key info --show-secret`),
+  permite RW y escribe/refresca `S3_*` + `IMAGES_ENABLED=true` en el `.env`.
+  Parseo verificado contra Garage real (ID, versión, buckets).
+- **`.iss`**: página toggle imágenes (default off); `Check: UseImages` en
+  `[Files]`/`[Icons]`/`[Run]`; prereq Docker con abort explicativo; genera
+  `garage.toml` + compose `.env`; corre `garage-init` al final; `docker compose
+  down` al desinstalar (datos conservados). Compila exit 0 (solo warning
+  conocido Startup).
+- Manual: instalación con imágenes, §7 re-configurar/desactivar, nota Startup.
+
+### Verificado
+
+- Sintaxis PS validada por parser; `iscc` compila con payload garage incluido.
+- `garage-init` **no ejecutado aquí** (tocaría el Garage dev: crearía bucket/key
+  reales) — pendiente VM limpia con instalador.
+
 ## [Sin publicar] — G1 instalador Garage: ensureBucket (rama installer)
 
 ### Añadido

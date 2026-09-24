@@ -13,12 +13,19 @@
 
 1. Ejecuta `Setup_POS-Server-<versión>.exe` como administrador.
 2. Elige carpeta (`C:\Program Files\POS Server`) y **puerto API** (default 3000).
-3. El instalador hace todo solo:
+3. Opcional: marca **Incluir Garage** solo si necesitas fotos de productos —
+   requiere **Docker Desktop instalado y corriendo** (si falta, el instalador
+   se detiene con mensaje; instala Docker o desmarca la casilla).
+4. El instalador hace todo solo:
    - genera `JWT_SECRET` + `LICENSE_HMAC_SECRET` aleatorios (`.env`),
-   - abre firewall privado (TCP puerto API + UDP 5000 discovery),
-   - aplica migraciones + seed demo (tenant `DEMO-0001`, admin PIN `1234`),
-   - deja acceso de **auto-arranque** (inicia sin ventana al prender la PC).
-4. Verifica: menú inicio → **Salud del servidor** → debe responder `{"statusCode":200,...,"service":"pos-server"}`.
+   - abre firewall privado (TCP puerto API + UDP 5000 discovery; Garage solo
+     escucha en localhost, sin reglas),
+   - aplica migraciones + seed demo + catálogo demo,
+   - con imágenes: genera `garage.toml` (rpc secreto), levanta el contenedor,
+     crea bucket `pos-images` + key y escribe las `S3_*` en `.env`,
+   - deja acceso de **auto-arranque** (inicia sin ventana al prender la PC;
+     Docker levanta Garage solo por `restart: unless-stopped`).
+5. Verifica: menú inicio → **Salud del servidor** → debe responder `{"statusCode":200,...,"service":"pos-server"}`.
 
 > Nota: el auto-arranque se instala en el **Startup del usuario que ejecuta el
 > Setup** (instalación admin). Si la caja opera con otro usuario de Windows,
@@ -69,3 +76,12 @@ nadie debe vender con los PINs de fábrica.
 | `403 LICENSE_EXPIRED` en todo | `.lic` vencido o ausente | renovar y subir `.lic` nuevo |
 | `FALTA JWT_SECRET` en log | `.env` borrado | reinstalar (regenera secretos; **los tokens previos se invalidan**) |
 | Ventas lentas / `SQLITE_BUSY` | >5 cajas escribiendo a la vez | contactar soporte (evaluar PG local) |
+| Upload de foto responde 503 | Garage apagado o sin bootstrap | menú inicio → **Configurar imágenes (Garage)** (re-ejecutable); verifica Docker corriendo |
+
+## 7) Imágenes: re-configurar o desactivar
+
+- **Re-configurar** (rotar keys, recrear bucket): ejecuta **Configurar imágenes
+  (Garage)** del menú inicio — es idempotente, reutiliza la key existente.
+- **Desactivar**: pon `IMAGES_ENABLED=false` en `C:\Program Files\POS Server\.env`
+  y reinicia; opcionalmente `docker compose -f "C:\Program Files\POS Server\garage\docker-compose.yml" down`
+  (los datos en `%ProgramData%\POS Server\garage` se conservan).

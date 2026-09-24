@@ -121,6 +121,9 @@ installer/windows/node/
 - [x] `pos-server.iss` + `env.template` + `bin/*.bat|vbs` (rama `installer`, F-I2).
 - [x] `README-INSTALADOR.md` (manual tienda: instalar, firewall, backup, reinstalar).
 - [x] Entrada `.gitignore` para `stage/output/node/*.exe`.
-- [ ] Node portable v22.12.0 descargado a `installer/stage/node/` (manual, ~30MB).
-- [ ] `iscc pos-server.iss` compila sin errores (requiere Inno Setup 6 en la máquina de release).
-- [ ] Build de prueba + checklist VM limpia (§4).
+- [x] Node portable v22.12.0 descargado a `installer/stage/node/` (manual, ~30MB).
+- [x] `iscc pos-server.iss` compila sin errores (F-I3a; solo warning conocido Startup).
+- [x] Garage opcional vía Docker (G2/G3): `garage/` (compose+toml.template),
+  `bin/garage-init.{bat,ps1}` idempotente, toggle en wizard + prereq Docker,
+  `ensureBucket()` en arranque (G1).
+- [ ] Build de prueba + checklist VM limpia (§4, con imágenes ON y OFF).

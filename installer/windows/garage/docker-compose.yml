@@ -1,0 +1,21 @@
+# installer/windows/garage/docker-compose.yml — Garage para sucursal (vía instalador).
+#
+# Se copia a {app}\garage\ en el stage. El instalador genera a su lado:
+#   garage/.env        → GARAGE_DATA_DIR / GARAGE_META_DIR (rutas ProgramData)
+#   garage/garage.toml → desde garage.toml.template (rpc_secret aleatorio)
+#
+# Solo API S3 en localhost: las tablets consumen el proxy /images del server,
+# nunca hablan con Garage directo (sin firewall, sin exposición LAN).
+# Auto-arranque: restart: unless-stopped (Docker lo levanta solo al prender la PC).
+services:
+  garage:
+    image: dxflrs/garage:v1.0.1
+    container_name: garage_s3
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3900:3900"
+    volumes:
+      - ./garage.toml:/etc/garage.toml
+      - ${GARAGE_DATA_DIR}:/var/lib/garage/data
+      - ${GARAGE_META_DIR}:/var/lib/garage/meta
+    command: ["server"]
