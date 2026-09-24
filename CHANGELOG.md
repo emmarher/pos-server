@@ -4,6 +4,26 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — G1 instalador Garage: ensureBucket (rama installer)
+
+### Añadido
+
+- **`ensureImagesBucket()`** en `storage.service.ts`: con `IMAGES_ENABLED=true`
+  verifica el bucket (`HeadBucket`) y lo crea si no existe (instalación fresca);
+  credenciales/red fallidas → `'unavailable'` **sin tumbar el arranque** (la
+  venta nunca depende de Garage; uploads responden 503 como antes).
+- Arranque (`server.ts`): lo invoca tras `listen` y loguea
+  `listo / desactivadas / no disponible`.
+- **Tests `storage-bucket.test.ts`** (4 casos, S3 mockeado): existe→ready,
+  inexistente→crea, 403→unavailable, flag off→disabled. Suite total: 30/30.
+
+### Verificado
+
+- `typecheck` limpio; suite 30/30 (auth-pin 6 + license 11 + images 9 + bucket 4).
+- G0 previo: vía nativa NO-GO en esta máquina (WDAC bloquea todo binario nuevo,
+  probado: .exe viejos corren, nuevos se bloquean); vía **Docker GO** (daemon
+  activo, `dxflrs/garage:v1.0.1` sano, S3 :3900 responde).
+
 ## [Sin publicar] — F-I3a installer: Setup compilado (rama installer)
 
 ### Añadido

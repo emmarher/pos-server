@@ -19,6 +19,7 @@ import { db } from './database/client.js'
 import { startDiscovery, stopDiscovery } from './services/udp-discovery.js'
 import { validateLicenseAtStartup } from './modules/license/license.service.js'
 import { startLicenseMonitor } from './services/license-monitor.js'
+import { ensureImagesBucket } from './services/storage.service.js'
 
 /* ── 1) ARRANQUE ─────────────────────────────────────────────────────── */
 
@@ -70,6 +71,15 @@ assertSchemaReady()
         process.exit(1)
       }
       app.log.info(`POS Server escuchando en ${address}`)
+
+      /* Bucket de imágenes (G1 instalador Garage): verifica o crea el bucket
+         si IMAGES_ENABLED=true. Best-effort: si Garage no responde, se loguea
+         y se sigue (la venta nunca depende de las imágenes). */
+      void ensureImagesBucket().then((images) => {
+        if (images === 'ready') app.log.info('Bucket de imágenes listo')
+        else if (images === 'disabled') app.log.info('Imágenes desactivadas (IMAGES_ENABLED=false)')
+        else app.log.warn('Bucket de imágenes no disponible — uploads responderán 503')
+      })
 
       /* Monitor de background: heartbeat TTL + expiración en caliente */
       licenseMonitor = startLicenseMonitor(app)

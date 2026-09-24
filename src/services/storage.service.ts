@@ -23,8 +23,10 @@
 import { randomUUID } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import {
+  CreateBucketCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -148,7 +150,45 @@ export function keyFromUrl(url: string | null | undefined, tenantId: string): st
 
 /* ── 4) HELPERS ──────────────────────────────────────────────────────── */
 
-/** Detecta errores "el objeto no existe" (borrar dos veces no es error). */
+/**
+ * Estado del bucket al arrancar (G1 instalador Garage).
+ * - 'disabled': IMAGES_ENABLED=false, no se toca S3.
+ * - 'ready': el bucket existe o se creó ahora.
+ * - 'unavailable': Garage no responde o credenciales inválidas. NUNCA lanza:
+ *   las imágenes son un extra y el servidor debe arrancar igual (la venta
+ *   no depende de Garage; los endpoints responden 503 controlado).
+ */
+export type ImagesBucketStatus = 'disabled' | 'ready' | 'unavailable'
+
+export async function ensureImagesBucket(): Promise<ImagesBucketStatus> {
+  if (!env.imagesEnabled) return 'disabled'
+  const client = getS3Client()
+  try {
+    await client.send(new HeadBucketCommand({ Bucket: env.s3Bucket }))
+    return 'ready'
+  } catch (err) {
+    if (!isNotFoundError(err) && !isNoSuchBucketError(err)) {
+      console.warn(
+        `[images] bucket no verificable (${describeS3Error(err)}); ` +
+          'arrancando sin imágenes.',
+      )
+      return 'unavailable'
+    }
+    // El bucket no existe (instalación fresca) → crearlo una vez.
+    try {
+      await client.send(new CreateBucketCommand({ Bucket: env.s3Bucket }))
+      return 'ready'
+    } catch (createErr) {
+      console.warn(
+        `[images] no se pudo crear el bucket (${describeS3Error(createErr)}); ` +
+          'arrancando sin imágenes.',
+      )
+      return 'unavailable'
+    }
+  }
+}
+
+/** Detecta "el objeto no existe" (borrar dos veces no es error). */
 function isNotFoundError(err: unknown): boolean {
   return (
     typeof err === 'object' &&
@@ -157,4 +197,24 @@ function isNotFoundError(err: unknown): boolean {
     ((err as { name?: string }).name === 'NoSuchKey' ||
       (err as { name?: string }).name === 'NotFound')
   )
+}
+
+/** Detecta "bucket inexistente" (HeadBucket en instalación fresca). */
+function isNoSuchBucketError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'name' in err &&
+    ((err as { name?: string }).name === 'NoSuchBucket' ||
+      (err as { name?: string }).name === 'NotFound')
+  )
+}
+
+/** Mensaje corto para logs sin volcar el objeto de error completo. */
+function describeS3Error(err: unknown): string {
+  if (typeof err === 'object' && err !== null && 'name' in err) {
+    const e = err as { name?: string; message?: string }
+    return `${e.name ?? 'Error'}: ${e.message ?? ''}`.trim()
+  }
+  return String(err)
 }
