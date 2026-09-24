@@ -20,6 +20,11 @@
    - deja acceso de **auto-arranque** (inicia sin ventana al prender la PC).
 4. Verifica: menú inicio → **Salud del servidor** → debe responder `{"statusCode":200,...,"service":"pos-server"}`.
 
+> Nota: el auto-arranque se instala en el **Startup del usuario que ejecuta el
+> Setup** (instalación admin). Si la caja opera con otro usuario de Windows,
+> copia `POS Server.lnk` de ese Startup al `shell:startup` del usuario cajero,
+> o ejecuta una vez `bin\start-server.vbs` con su sesión.
+
 ## 3) Activar licencia (obligatorio, primera vez)
 
 La instalación fresca nace **vencida a propósito** (bootstrap): al abrir el POS

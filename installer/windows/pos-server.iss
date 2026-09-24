@@ -26,7 +26,7 @@ AppId={{B2E8C4A1-5F3D-4A7B-9C1E-POSSERVER01}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-DefaultDirName={pf}\POS Server
+DefaultDirName={autopf}\POS Server
 DefaultGroupName=POS Server
 PrivilegesRequired=admin
 Compression=lzma2/max
@@ -107,18 +107,19 @@ begin
   DeleteFile(TmpFile);
 end;
 
-{ Escribe {app}\.env desde env.template sustituyendo marcas. Falla si no hay secretos. }
+{ Escribe el .env en la carpeta de programa desde env.template, sustituyendo marcas. Falla si no hay secretos. }
 function WriteEnvFile(): Boolean;
 var
-  Template, Content, DataDir, Jwt, Hmac, Port: String;
+  { LoadStringFromFile exige AnsiString en su parámetro var }
+  Template: AnsiString;
+  Content, DataDir, Jwt, Hmac, Port: String;
 begin
   Result := False;
-  if not FileExists(ExpandConstant('{src}\env.template')) then
+  if not LoadStringFromFile(ExpandConstant('{src}\env.template'), Template) then
   begin
-    MsgBox('No se encontró env.template junto al instalador.', mbError, MB_OK);
+    MsgBox('No se pudo leer env.template junto al instalador.', mbError, MB_OK);
     Exit;
   end;
-  LoadStringFromFile(ExpandConstant('{src}\env.template'), Template);
   Port := PortPage.Values[0];
   if (StrToIntDef(Port, 0) <= 0) or (StrToIntDef(Port, 0) > 65535) then
   begin

@@ -4,6 +4,33 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — F-I3a installer: Setup compilado (rama installer)
+
+### Añadido
+
+- **Primer `Setup_POS-Server-0.1.0.exe` compilado** (~34.5MB, Inno Setup 6,
+  `installer/output/` — gitignored, artefacto de release, no versionado).
+- Stage verificado: `dist/` fresco, migraciones 001-007 sqlite, `package.json`,
+  `node_modules` prod (`npm ci --omit=dev`), Node portable **v22.12.0**,
+  nativos `better-sqlite3`/`sharp` cargan OK bajo el portable (ABI 127, sin
+  rebuild).
+- Fixes del `.iss` tras compilación real: comentarios `{...}` no anidan
+  (`{app}` dentro rompía el parser), `LoadStringFromFile` es procedimiento con
+  `var AnsiString`, `{pf}` → `{autopf}`. Queda solo el warning conocido de
+  áreas de usuario (auto-arranque Startup, documentado en el manual).
+
+### Verificado
+
+- `iscc` exit 0 determinista; log confirma payload (`server.js`,
+  `migrate/seed/seed-catalog.js`, migraciones, `node.exe`, `bin/`).
+- Simulación de instalado previa (F-I2) sigue válida: boot, bootstrap,
+  403 sin licencia.
+
+### Pendiente
+
+- Instalar el Setup en **VM limpia** + checklist §4 (no hacerlo en dev: toca
+  Program Files, firewall, Startup) + claves prod + `.lic` real (F-I0).
+
 ## [Sin publicar] — F-I2b installer: PIN inicial obligatorio (rama installer)
 
 ### Añadido
