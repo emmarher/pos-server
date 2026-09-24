@@ -4,6 +4,15 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — Layout de ticket para el corte (rama installer)
+
+### Cambiado
+
+- **`buildEscPosTicket`** (stored tickets → reimpresión): sin divisor inicial;
+  cierre `GRACIAS POR SU COMPRA` → 9 blancas → `==============================`
+  (30) → tienda en mayúsculas. Espejo del desktop para que venta y reimpresión
+  salgan idénticas.
+
 ## [Sin publicar] — G2/G3 instalador: Garage opcional vía Docker (rama installer)
 
 ### Añadido

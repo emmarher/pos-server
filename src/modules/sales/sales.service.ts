@@ -941,10 +941,14 @@ interface TicketInput {
   paymentState: string
 }
 
-/** Construye el contenido del ticket de venta (para reimpresión). */
+/** Construye el contenido del ticket de venta (para reimpresión).
+ *
+ * Layout espejo del desktop (ticket.ts buildTicket80mm) a 30 columnas:
+ * header sin divisores iniciales; cierre con mensaje, 9 líneas en blanco,
+ * divisor '======' y nombre de la tienda (para que el corte caiga bien).
+ */
 function buildEscPosTicket(input: TicketInput): string {
   const lines: string[] = []
-  lines.push('==============================')
   lines.push(input.businessName.toUpperCase())
   lines.push(`FOLIO: ${input.folio}`)
   lines.push(new Date(input.createdAt).toLocaleString('es-MX'))
@@ -984,7 +988,10 @@ function buildEscPosTicket(input: TicketInput): string {
   if (input.paymentState !== 'PAID') {
     lines.push(`ESTADO: ${input.paymentState}`)
   }
+  // Cierre para el corte (espejo desktop): mensaje, 9 blancas, divisor, tienda
+  lines.push('GRACIAS POR SU COMPRA')
+  for (let i = 0; i < 9; i++) lines.push('')
   lines.push('==============================')
-  lines.push('Gracias por su compra')
+  lines.push(input.businessName.toUpperCase())
   return lines.join('\n')
 }
