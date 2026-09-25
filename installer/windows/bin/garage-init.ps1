@@ -1,4 +1,4 @@
-<#
+﻿<#
   installer/windows/bin/garage-init.ps1 — Bootstrap idempotente de Garage en sucursal.
 
   Qué hace (seguro re-ejecutar):

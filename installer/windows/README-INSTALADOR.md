@@ -13,9 +13,15 @@
 
 1. Ejecuta `Setup_POS-Server-<versión>.exe` como administrador.
 2. Elige carpeta (`C:\Program Files\POS Server`) y **puerto API** (default 3000).
-3. Opcional: marca **Incluir Garage** solo si necesitas fotos de productos —
-   requiere **Docker Desktop instalado y corriendo** (si falta, el instalador
-   se detiene con mensaje; instala Docker o desmarca la casilla).
+3. Opcional: marca **Incluir Garage** solo si necesitas fotos de productos.
+   Sin Docker, el instalador se detiene con mensaje; tienes dos caminos:
+   - **A (recomendado)**: termina sin imágenes y luego usa el acceso
+     **Instalar Docker + Garage** del menú inicio: un asistente con doble clic
+     instala WSL → descarga e instala Docker (~600MB, internet requerida) →
+     levanta Garage → lo configura. Si pide reinicio, **continúa solo** al
+     volver a entrar. Progreso visible y log en
+     `%ProgramData%\POS Server\garage\install-garage.log`.
+   - **B**: instala Docker Desktop manual y marca la casilla reinstalando.
 4. El instalador hace todo solo:
    - genera `JWT_SECRET` + `LICENSE_HMAC_SECRET` aleatorios (`.env`),
    - abre firewall privado (TCP puerto API + UDP 5000 discovery; Garage solo

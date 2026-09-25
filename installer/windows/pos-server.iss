@@ -45,7 +45,8 @@ Source: "..\stage\package.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\stage\node\node.exe"; DestDir: "{app}\node"; Flags: ignoreversion
 ; node_modules de prod (instaladas en stage con npm ci --omit=dev + rebuild nativos)
 Source: "..\stage\node_modules\*"; DestDir: "{app}\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Scripts operativos (+ init de imágenes si el wizard lo activa)
+; Scripts operativos (+ init de imágenes si el wizard lo activa).
+; instalar-garage.* entra por *.bat/*.ps1 (doble clic, con o sin imágenes previas).
 Source: "bin\*.bat"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "bin\*.vbs"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "bin\*.ps1"; DestDir: "{app}\bin"; Flags: ignoreversion
@@ -65,6 +66,7 @@ Name: "{group}\Detener POS Server"; Filename: "{app}\bin\stop-server.bat"
 Name: "{group}\Salud del servidor"; Filename: "{app}\bin\healthcheck.bat"
 Name: "{group}\Respaldo base de datos"; Filename: "{app}\bin\backup.bat"
 Name: "{group}\Configurar imágenes (Garage)"; Filename: "{app}\bin\garage-init.bat"; Check: UseImages
+Name: "{group}\Instalar Docker + Garage"; Filename: "{app}\bin\instalar-garage.bat"
 Name: "{group}\Desinstalar POS Server"; Filename: "{uninstallexe}"
 ; Auto-arranque v1: acceso en Startup del usuario (sin ventana via .vbs)
 Name: "{userstartup}\POS Server"; Filename: "{app}\bin\start-server.vbs"

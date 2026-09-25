@@ -4,6 +4,23 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — Asistente Docker+Garage un clic (rama installer)
+
+### Añadido
+
+- **`bin/instalar-garage.{bat,ps1}`**: asistente por fases con progreso visible
+  (chequeos → WSL → Docker ~600MB descarga bajo demanda → Garage → verificar),
+  estado persistente, **auto-reanudación vía RunOnce** ante reinicios, log en
+  ProgramData y códigos de salida por fase para soporte. Reutiliza
+  `garage-init.ps1` (sin duplicar bootstrap). Acceso en menú inicio del `.iss`.
+- Scripts `.ps1`/`.bat` con **BOM UTF-8** (sin ella, PS 5.1 maldecodifica
+  acentos y el parser falla en cascada — detectado y corregido aquí).
+
+### Verificado
+
+- Parser PS sin errores en ambos scripts; `.iss` compila exit 0 con el acceso
+  incluido. Ejecución real (descarga/reinicios) pendiente de VM limpia.
+
 ## [Sin publicar] — Layout de ticket para el corte (rama installer)
 
 ### Cambiado

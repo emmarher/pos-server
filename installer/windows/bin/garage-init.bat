@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 REM installer/windows/bin/garage-init.bat — Bootstrap de Garage (llama al .ps1).
 REM Idempotente: seguro re-ejecutar. Requiere Docker Desktop corriendo.
 setlocal
