@@ -1,0 +1,15 @@
+services:
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rustfs_s3
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3900:9000" # API S3 (RustFS 9000 → 3900 para no cambiar S3_ENDPOINT)
+      - "127.0.0.1:9001:9001" # Console opcional
+    environment:
+      - RUSTFS_ACCESS_KEY=${S3_ACCESS_KEY_ID:-rustfsadmin}
+      - RUSTFS_SECRET_KEY=${S3_SECRET_ACCESS_KEY:-rustfsadmin123}
+    volumes:
+      - ${RUSTFS_DATA_DIR:-./rustfs_data}:/data
+    # Prod Windows usa binario nativo rustfs.exe --service (sin Docker)
+    # Este compose es solo para dev / fallback si el binario no está presente.

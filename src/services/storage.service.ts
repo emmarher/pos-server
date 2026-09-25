@@ -1,10 +1,11 @@
 /**
- * src/services/storage.service.ts — Almacenamiento de imágenes (Garage S3).
+ * src/services/storage.service.ts — Almacenamiento de imágenes (RustFS S3, S3-compatible).
  *
  * ────────────────────────────────────────────────────────────────────────
  * Qué hace este módulo:
- *   - Expone un cliente S3-compatible (Garage) como singleton para todo
- *     el servidor, con `forcePathStyle: true` (requerido por Garage).
+ *   - Expone un cliente S3-compatible (RustFS, drop-in de Garage) como
+ *     singleton para todo el servidor, con `forcePathStyle: true`
+ *     (requerido por RustFS/Garage self-hosted).
  *   - `uploadProductImage()` optimiza el buffer con sharp (resize máx
  *     1000×1000, WebP q80) y lo sube al bucket bajo una key MULTI-TENANT:
  *     `{tenant_id}/prod_{uuid}.webp`. Nunca se escribe en la raíz.
@@ -12,12 +13,12 @@
  *
  * Notas:
  *   - LECTURA VÍA PROXY: las tablets de la LAN no pueden resolver el vhost
- *     público de Garage (`productos.web.garage.localhost:3902`), así que la
- *     columna `products.imagen_url` guarda una RUTA RELATIVA servida por
- *     Fastify: `/images/{tenant_id}/prod_{uuid}.webp`. La tablet la resuelve
- *     contra la URL base del servidor POS que ya conoce.
+ *     público S3 (`*.web.*:3902`), así que la columna `products.imagen_url`
+ *     guarda una RUTA RELATIVA servida por Fastify: `/images/{tenant_id}/prod_{uuid}.webp`.
+ *     La tablet la resuelve contra la URL base del servidor POS que ya conoce.
  *   - Este módulo NO toca la base de datos: solo el bucket. La escritura
  *     en `products.imagen_url` vive en el módulo que llama (products).
+ *   - Compat: `S3_REGION` mantiene `garage` por defecto y acepta `rustfs`/`us-east-1`.
  * ────────────────────────────────────────────────────────────────────────
  */
 import { randomUUID } from 'node:crypto'
@@ -38,20 +39,37 @@ import { env } from '../config/env.js'
 /** Instancia única del cliente (se crea al primer uso, no al importar). */
 let s3Client: S3Client | null = null
 
-/** Devuelve el cliente S3 configurado para Garage (creación perezosa). */
+/** Devuelve el cliente S3 configurado para RustFS/Garage (creación perezosa). */
 function getS3Client(): S3Client {
   if (!s3Client) {
-    s3Client = new S3Client({
-      endpoint: env.s3Endpoint,
-      region: env.s3Region,
-      credentials: {
-        accessKeyId: env.s3AccessKeyId,
-        secretAccessKey: env.s3SecretAccessKey,
-      },
-      // Garage y la mayoría de S3-compatibles self-hosted usan path-style
-      // (http://endpoint/bucket/key) en lugar de virtual-hosted style.
-      forcePathStyle: true,
-    })
+    try {
+      s3Client = new S3Client({
+        endpoint: env.s3Endpoint,
+        region: env.s3Region,
+        credentials: {
+          accessKeyId: env.s3AccessKeyId,
+          secretAccessKey: env.s3SecretAccessKey,
+        },
+        // RustFS/Garage y la mayoría de S3-compatibles self-hosted usan path-style
+        // (http://endpoint/bucket/key) en lugar de virtual-hosted style.
+        forcePathStyle: true,
+        // Evita hangs si RustFS no responde (dev sin Docker).
+        requestHandler: { requestTimeout: 5000 } as unknown as S3Client['config']['requestHandler'],
+      })
+    } catch (err) {
+      // Fallback: si la construcción falla por credenciales vacías, igual creamos
+      // cliente — ensureImagesBucket lo marcará como 'unavailable' sin crashear.
+      console.warn(`[images] S3 cliente no configurado (${describeS3Error(err)})`)
+      s3Client = new S3Client({
+        endpoint: env.s3Endpoint || 'http://127.0.0.1:3900',
+        region: env.s3Region || 'garage',
+        credentials: {
+          accessKeyId: env.s3AccessKeyId || 'tmp',
+          secretAccessKey: env.s3SecretAccessKey || 'tmp',
+        },
+        forcePathStyle: true,
+      })
+    }
   }
   return s3Client
 }
@@ -151,12 +169,12 @@ export function keyFromUrl(url: string | null | undefined, tenantId: string): st
 /* ── 4) HELPERS ──────────────────────────────────────────────────────── */
 
 /**
- * Estado del bucket al arrancar (G1 instalador Garage).
+ * Estado del bucket al arrancar (G1 instalador RustFS/Garage).
  * - 'disabled': IMAGES_ENABLED=false, no se toca S3.
  * - 'ready': el bucket existe o se creó ahora.
- * - 'unavailable': Garage no responde o credenciales inválidas. NUNCA lanza:
+ * - 'unavailable': RustFS/Garage no responde o credenciales inválidas. NUNCA lanza:
  *   las imágenes son un extra y el servidor debe arrancar igual (la venta
- *   no depende de Garage; los endpoints responden 503 controlado).
+ *   no depende del S3; los endpoints responden 503 controlado).
  */
 export type ImagesBucketStatus = 'disabled' | 'ready' | 'unavailable'
 
@@ -179,6 +197,15 @@ export async function ensureImagesBucket(): Promise<ImagesBucketStatus> {
       await client.send(new CreateBucketCommand({ Bucket: env.s3Bucket }))
       return 'ready'
     } catch (createErr) {
+      // RustFS idempotencia: BucketAlreadyOwnedByYou = ya existe (race) → ready.
+      if (
+        typeof createErr === 'object' &&
+        createErr !== null &&
+        'name' in createErr &&
+        (createErr as { name?: string }).name === 'BucketAlreadyOwnedByYou'
+      ) {
+        return 'ready'
+      }
       console.warn(
         `[images] no se pudo crear el bucket (${describeS3Error(createErr)}); ` +
           'arrancando sin imágenes.',

@@ -21,7 +21,7 @@ async function setup(): Promise<void> {
   process.env.S3_REGION = 'garage'
   process.env.S3_ACCESS_KEY_ID = 'test-access-key'
   process.env.S3_SECRET_ACCESS_KEY = 'test-secret-key'
-  process.env.S3_BUCKET = 'productos'
+  process.env.S3_BUCKET = 'pos-images'
   process.env.S3_PUBLIC_URL = 'http://127.0.0.1:3902'
   process.env.S3_MAX_FILE_SIZE_MB = '5'
   // Seed demo SIN pin forzado: globalSetup corre en proceso aparte y NO hereda

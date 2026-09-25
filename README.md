@@ -337,7 +337,7 @@ pos-server/
 │   ├── middleware/auth.ts  # authenticate + requirePermission
 │   ├── modules/            # auth, products, sales, inventory, customers, cashier
 │   │                       #   (print, scale, sync, reports — pendientes)
-│   ├── services/           # udp-discovery.ts (+ print-queue, scale-reader, sync-engine futuros)
+│   ├── services/           # udp-discovery.ts, storage.service.ts (RustFS S3) (+ sync-engine futuro)
 │   └── types/              # auth, customers, products, sales, inventory, response, errors
 ├── migrations/             # 001_init … 004 (sqlite) — aplicar con npm run migrate
 ├── tests/                  # (pendiente)

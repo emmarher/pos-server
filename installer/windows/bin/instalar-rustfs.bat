@@ -1,6 +1,7 @@
-﻿@echo off
-REM installer/windows/bin/instalar-garage.bat — LEGACY wrapper (Garage -> RustFS).
-REM Redirige a instalar-rustfs.bat.
+@echo off
+REM installer/windows/bin/instalar-rustfs.bat — Instala Docker + RustFS con doble clic.
+REM Requiere: Windows 10/11 x64, cuenta de administrador, internet (~600MB descarga).
+REM El asistente muestra el paso actual; ante reinicios CONTINÚA SOLO al volver a entrar.
 REM Log: %ProgramData%\POS Server\rustfs\install-rustfs.log
 net session >nul 2>&1
 if errorlevel 1 (
@@ -8,11 +9,7 @@ if errorlevel 1 (
   pause
   exit /b 10
 )
-if exist "%~dp0instalar-rustfs.ps1" (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0instalar-rustfs.ps1"
-) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0instalar-garage.ps1"
-)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0instalar-rustfs.ps1"
 set "CODE=%ERRORLEVEL%"
 if "%CODE%"=="20" (
   echo El equipo se reiniciara. Al volver a entrar, el asistente continua solo.

@@ -61,22 +61,22 @@ export interface AppEnv {
   /** Nivel de log de Fastify/pino */
   logLevel: string
 
-  /* ── Almacenamiento de imágenes (Garage, S3-compatible) ────────────── */
+  /* ── Almacenamiento de imágenes (RustFS/Garage, S3-compatible) ───── */
 
   /**
    * Habilita el módulo de imágenes. En false, los endpoints de upload
-   * responden 503 controlado (útil en dev/tests sin Garage corriendo).
+   * responden 503 controlado (útil en dev/tests sin RustFS corriendo).
    */
   imagesEnabled: boolean
   /** Endpoint API del S3-compatible (ej. http://127.0.0.1:3900) */
   s3Endpoint: string
-  /** Región del bucket (Garage suele usar 'garage') */
+  /** Región del bucket (canónico 'garage' por compat, acepta 'rustfs'/'us-east-1') */
   s3Region: string
   s3AccessKeyId: string
   s3SecretAccessKey: string
-  /** Nombre del bucket de imágenes */
+  /** Nombre del bucket de imágenes (canónico 'pos-images') */
   s3Bucket: string
-  /** URL pública directa para leer objetos (ej. http://127.0.0.1:3901) */
+  /** URL pública directa para leer objetos (ej. http://127.0.0.1:3902) */
   s3PublicUrl: string
   /** Tamaño máximo por imagen en MB (default 5) */
   s3MaxFileSizeMb: number
@@ -138,7 +138,7 @@ function loadEnv(): AppEnv {
 
     // Imágenes: si IMAGES_ENABLED=true pero falta alguna credencial S3,
     // se desactiva el módulo con warning en vez de tumbar el arranque
-    // (las imágenes son un extra: la venta nunca debe depender de Garage).
+    // (las imágenes son un extra: la venta nunca debe depender del S3).
     ...loadImagesEnv(),
 
     /* ── Sistema de licencias firmadas (Ed25519) ──────────────────────── */
@@ -160,7 +160,7 @@ function loadEnv(): AppEnv {
   }
 }
 
-/** Lee y normaliza la config del storage de imágenes (Garage/S3). */
+/** Lee y normaliza la config del storage de imágenes (RustFS/Garage S3). Mantiene S3_REGION=garage por compat y acepta rustfs/us-east-1. */
 function loadImagesEnv(): Pick<
   AppEnv,
   | 'imagesEnabled'

@@ -1,5 +1,9 @@
 ﻿@echo off
-REM installer/windows/bin/garage-init.bat — Bootstrap de Garage (llama al .ps1).
-REM Idempotente: seguro re-ejecutar. Requiere Docker Desktop corriendo.
+REM installer/windows/bin/garage-init.bat — LEGACY wrapper (Garage -> RustFS).
+REM Redirige a rustfs-init.bat para compatibilidad. Idempotente.
 setlocal
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0garage-init.ps1"
+if exist "%~dp0rustfs-init.bat" (
+  call "%~dp0rustfs-init.bat"
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0garage-init.ps1"
+)
