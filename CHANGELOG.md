@@ -4,6 +4,21 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — Integración remota RustFS (rama installer)
+
+### Recibido (pull fast-forward `9f48921`, sin conflictos)
+
+- Migración Garage→RustFS: `storage.service` drop-in, `S3_REGION` compat,
+  `installer/windows/rustfs/` (compose dev + binario nativo prod), wrappers
+  legacy en `garage-init`/`instalar-garage`, tests y `.iss` pivotado a RustFS.
+- Nuestros archivos Garage quedan como legacy en repo (wrappers delegan a
+  rustfs con fallback a originales) — decisión registrada, sin duplicar lógica.
+
+### Verificado local tras el pull
+
+- `typecheck` limpio, suite 30/30, `iscc` exit 0 con payload rustfs
+  (`Setup_POS-Server-0.1.0.exe` regenerado, gitignored).
+
 ## [Sin publicar] — Asistente Docker+Garage un clic (rama installer)
 
 ### Añadido
