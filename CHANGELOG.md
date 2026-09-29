@@ -4,6 +4,17 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — Fix crítico Set-DotEnvVar (rama installer)
+
+### Corregido
+
+- **Bug que corrompía el `.env`**: en PS 5.1, `foreach` de un solo elemento
+  devuelve escalar `String` (no array) y el `+=` **concatena**
+  (`A=1B=2`), perdiendo vars y pegando líneas. Afectaba a `rustfs-service.ps1`
+  y `rustfs-init.ps1` (credenciales S3 + `IMAGES_ENABLED` quedaban inservibles
+  en instalación real). Se fuerza array con `@(...)`. Reproducido y verificado
+  con prueba aislada (3 vars, update-in-place OK).
+
 ## [Sin publicar] — Integración remota RustFS (rama installer)
 
 ### Recibido (pull fast-forward `9f48921`, sin conflictos)

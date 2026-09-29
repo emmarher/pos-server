@@ -51,8 +51,10 @@ Source: "bin\*.bat"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "bin\*.vbs"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "bin\*.ps1"; DestDir: "{app}\bin"; Flags: ignoreversion
 ; RustFS (solo si el wizard activa imágenes; release copia
-; installer/windows/rustfs/* a stage/rustfs/ antes de compilar; dev=Docker, prod=binario nativo)
+; installer/windows/rustfs/* a stage/rustfs/ antes de compilar;
+; dev=Docker, prod=binario nativo rustfs.exe 1.0.0 como tarea POSRustFS)
 Source: "..\stage\rustfs\docker-compose.yml"; DestDir: "{app}\rustfs"; Flags: ignoreversion; Check: UseImages
+Source: "..\stage\rustfs\rustfs.exe"; DestDir: "{app}\rustfs"; Flags: ignoreversion; Check: UseImages
 
 [Dirs]
 Name: "{#DataDir}"; Permissions: users-modify
@@ -66,6 +68,7 @@ Name: "{group}\Salud del servidor"; Filename: "{app}\bin\healthcheck.bat"
 Name: "{group}\Respaldo base de datos"; Filename: "{app}\bin\backup.bat"
 Name: "{group}\Configurar imágenes (RustFS)"; Filename: "{app}\bin\rustfs-init.bat"; Check: UseImages
 Name: "{group}\Instalar Docker + RustFS"; Filename: "{app}\bin\instalar-rustfs.bat"
+Name: "{group}\Servicio RustFS (iniciar/detener)"; Filename: "{app}\bin\rustfs-service.bat"; Check: UseImages
 Name: "{group}\Desinstalar POS Server"; Filename: "{uninstallexe}"
 ; Auto-arranque v1: acceso en Startup del usuario (sin ventana via .vbs)
 Name: "{userstartup}\POS Server"; Filename: "{app}\bin\start-server.vbs"
@@ -78,6 +81,9 @@ Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\migrate.js"; W
 Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\seed.js"; WorkingDir: "{app}"; StatusMsg: "Creando datos iniciales..."; Flags: runhidden waituntilterminated
 ; Catálogo demo (productos demo para vender de inmediato — decisión producto F-I2b)
 Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\seed-catalog.js"; WorkingDir: "{app}"; StatusMsg: "Cargando catálogo demo..."; Flags: runhidden waituntilterminated
+; Servicio nativo RustFS (tarea POSRustFS, auto-arranque en boot, binario 1.0.0 verificado).
+; Va ANTES de rustfs-init para que este detecte la tarea y omita compose.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\rustfs-service.ps1"" -Action Install"; WorkingDir: "{app}\bin"; StatusMsg: "Instalando servicio RustFS..."; Flags: runhidden waituntilterminated; Check: UseImages
 ; Bootstrap de imágenes (solo si el wizard las activó; rustfs-init es idempotente, con try/catch)
 Filename: "{app}\bin\rustfs-init.bat"; WorkingDir: "{app}\bin"; StatusMsg: "Configurando almacenamiento de imágenes (RustFS)..."; Flags: waituntilterminated; Check: UseImages
 
@@ -243,6 +249,8 @@ begin
     { Detener RustFS si se instaló (los datos en ProgramData se conservan).
       No falla si Docker/binario ya no existe: Exec ignora el error. }
     Exec('docker', 'compose -f "' + ExpandConstant('{app}\rustfs\docker-compose.yml') + '" down', '', SW_HIDE, ewWaitUntilTerminated, Res);
-    Exec(ExpandConstant('{app}\rustfs\rustfs.exe'), '--service uninstall', '', SW_HIDE, ewWaitUntilTerminated, Res);
+    { Eliminar tarea-servicio POSRustFS (el binario no trae subcomando service;
+      datos en ProgramData se conservan). No falla si ya no existe. }
+    Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\bin\rustfs-service.ps1') + '" -Action Uninstall', '', SW_HIDE, ewWaitUntilTerminated, Res);
   end;
 end;

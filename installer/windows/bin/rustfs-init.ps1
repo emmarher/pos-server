@@ -29,9 +29,11 @@ function Set-DotEnvVar($Path, $Name, $Value) {
   $lines = @()
   if (Test-Path -LiteralPath $Path) { $lines = @(Get-Content -LiteralPath $Path) }
   $found = $false
-  $updated = foreach ($line in $lines) {
+  # OJO: foreach de un solo elemento devuelve escalar String (no array) y el
+  # += concatenaría ("A=1B=2"). El @() fuerza array siempre.
+  $updated = @(foreach ($line in $lines) {
     if ($line -match "^$Name=") { $found = $true; "$Name=$Value" } else { $line }
-  }
+  })
   if (-not $found) { $updated += "$Name=$Value" }
   Set-Content -LiteralPath $Path -Value $updated -Encoding Ascii
 }
@@ -50,7 +52,14 @@ function Gen-HexSecret($NodeExe) {
 $NodeExe = Join-Path $AppDir 'node\node.exe'
 if (-not (Test-Path -LiteralPath $NodeExe)) { $NodeExe = 'node' }
 
-# 1) RustFS arriba (Docker) o verificación de binario
+# 1) RustFS arriba: preferir tarea-servicio nativa (prod) sobre compose (dev).
+# Si existe la tarea POSRustFS, asegurar que corre y OMITIR compose (mismo :3900).
+$taskExists = $false
+try { & schtasks /query /TN 'POSRustFS' 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { $taskExists = $true } } catch {}
+if ($taskExists) {
+  Write-Output '[rustfs-init] tarea POSRustFS detectada (binario nativo): asegurando arranque, sin compose.'
+  & schtasks /run /TN 'POSRustFS' 2>$null | Out-Null
+} else {
 $composeFile = Join-Path $RustfsDir 'docker-compose.yml'
 $hasCompose = Test-Path -LiteralPath $composeFile
 $hasBinary = Test-Path -LiteralPath (Join-Path $RustfsDir 'rustfs.exe')
@@ -62,7 +71,8 @@ if ($hasCompose) {
     & docker compose -f $composeFile up -d | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Warning '[rustfs-init] docker compose up -d falló (continuando, el binario o ensureImagesBucket lo creará)' }
   }
-}
+} # fin if ($hasCompose)
+} # fin else (sin tarea-servicio): vía compose/dev
 
 # Espera API :3900 (best-effort, no aborta si aún no está — ensureImagesBucket reintenta)
 $ready = $false
