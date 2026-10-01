@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 REM installer/windows/bin/instalar-garage.bat — LEGACY wrapper (Garage -> RustFS).
 REM Redirige a instalar-rustfs.bat.
 REM Log: %ProgramData%\POS Server\garage\install-garage.log

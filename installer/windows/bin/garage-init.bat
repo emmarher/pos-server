@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 REM installer/windows/bin/garage-init.bat — LEGACY wrapper (Garage -> RustFS).
 REM Redirige a rustfs-init.bat para compatibilidad. Idempotente.
 setlocal
