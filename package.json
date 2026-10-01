@@ -1,6 +1,6 @@
 {
   "name": "pos-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Backend del Sistema POS v4 — Fastify + PostgreSQL 16 (multi-tenant, fuente única de verdad).",
   "private": true,
   "type": "module",

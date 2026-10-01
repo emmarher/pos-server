@@ -18,7 +18,7 @@
 ; Mantener AppVersion sincronizada con pos-server/package.json "version".
 
 #define AppName "POS Server"
-#define AppVersion "0.2.0"
+#define AppVersion "0.2.1"
 #define AppPublisher "POS"
 #define DataDir "{commonappdata}\\POS Server\\data"
 
@@ -65,6 +65,7 @@ Name: "{group}\Iniciar POS Server"; Filename: "{app}\bin\start-server.bat"
 Name: "{group}\Iniciar POS Server (fondo)"; Filename: "{app}\bin\start-server.vbs"
 Name: "{group}\Detener POS Server"; Filename: "{app}\bin\stop-server.bat"
 Name: "{group}\Salud del servidor"; Filename: "{app}\bin\healthcheck.bat"
+Name: "{group}\Diagnóstico (logs y estado)"; Filename: "{app}\bin\diagnostico.bat"
 Name: "{group}\Respaldo base de datos"; Filename: "{app}\bin\backup.bat"
 Name: "{group}\Configurar imágenes (RustFS)"; Filename: "{app}\bin\rustfs-init.bat"; Check: UseImages
 Name: "{group}\Instalar Docker + RustFS"; Filename: "{app}\bin\instalar-rustfs.bat"
@@ -86,6 +87,9 @@ Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\seed-catalog.j
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\rustfs-service.ps1"" -Action Install"; WorkingDir: "{app}\bin"; StatusMsg: "Instalando servicio RustFS..."; Flags: runhidden waituntilterminated; Check: UseImages
 ; Bootstrap de imágenes (solo si el wizard las activó; rustfs-init es idempotente, con try/catch)
 Filename: "{app}\bin\rustfs-init.bat"; WorkingDir: "{app}\bin"; StatusMsg: "Configurando almacenamiento de imágenes (RustFS)..."; Flags: waituntilterminated; Check: UseImages
+; Auto-arranque inmediato: deja el server corriendo al terminar el wizard
+; (antes solo quedaba el acceso Startup → exigía cerrar sesión/entrar).
+Filename: "{app}\bin\start-server.vbs"; StatusMsg: "Arrancando POS Server..."; Flags: nowait
 
 [UninstallDelete]
 Type: files; Name: "{app}\.env"

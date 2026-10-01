@@ -75,6 +75,10 @@ nadie debe vender con los PINs de fábrica.
 
 ## 6) Problemas comunes
 
+Si algo falla, ejecuta primero el acceso **Diagnóstico (logs y estado)** del
+menú inicio: revisa archivos, proceso, puerto, `/health`, UDP y muestra la
+cola del log. Pega su salida completa al reportar. Códigos: 0 = sano.
+
 | Síntoma | Causa probable | Qué hacer |
 |---|---|---|
 | `Salud` no responde | servidor detenido o puerto ocupado | Iniciar (fondo); `netstat -ano \| findstr 3000` |

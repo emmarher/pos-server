@@ -4,6 +4,24 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.1] — 2026-10-01 — Diagnóstico y arranque (rama installer)
+
+### Añadido
+
+- **Logs a archivo**: `start-server.bat/.vbs` redirigen a
+  `%ProgramData%\POS Server\logs\server-AAAAMMDD.log` (un crash de arranque
+  ya no es invisible: era la causa del HTTP 000).
+- **`diagnostico.bat/.ps1`** (acceso en menú): chequeos OK/FAIL — archivos,
+  proceso por línea de comando, puerto LISTEN, `/health` con cuerpo, UDP 5000,
+  cola del log. Solo lectura; salida = nº de fallos.
+- **Auto-arranque post-instalación**: `[Run]` lanza el server al terminar el
+  wizard (antes solo quedaba Startup → exigía cerrar sesión).
+
+### Versión
+
+- `0.2.0` → **`0.2.1`** (package.json, `.iss`, `/health`) por cambios solo de
+  instalador; `Setup_POS-Server-0.2.1.exe`.
+
 ## [0.2.0] — 2026-10-01 — Versión identificable (rama installer)
 
 ### Cambiado
