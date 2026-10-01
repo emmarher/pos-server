@@ -4,6 +4,14 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.0] — 2026-10-01 — Versión identificable (rama installer)
+
+### Cambiado
+
+- Versión `0.1.0` → **`0.2.0`** en `package.json`, `.iss AppVersion` (nombre del
+  Setup) y `src/app.ts` (`/health` la reporta). El instalador sale como
+  `Setup_POS-Server-0.2.0.exe` para distinguirlo del anterior.
+
 ## [Sin publicar] — Instalador: JWT 12h + .env inline + rutas robustas (rama installer)
 
 ### Cambiado
