@@ -4,6 +4,23 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [Sin publicar] — Instalador: JWT 12h + .env inline + rutas robustas (rama installer)
+
+### Cambiado
+
+- **`JWT_EXPIRES_IN=43200` (12h)** en el `.env` generado (antes 24h): cubre turno
+  completo; refresh 30d intacto.
+- **`.env` generado inline en Pascal** (adiós `env.template` externo, causa del
+  error "No se pudo leer env.template"): **guardia conservar-si-existe** — en
+  reinstalación no se rota nada (protege sesiones y HMAC anti-rollback de la
+  licencia, clave para renovar sin reinstalar).
+- **`start-server.vbs` y `stop-server.bat`**: rutas derivadas del propio script
+  (antes hardcode `%ProgramFiles%` → 80070002 al instalar en x86).
+
+### Verificado
+
+- `iscc` exit 0, `Setup_POS-Server-0.1.0.exe` fresco (~103 MB).
+
 ## [Sin publicar] — Fix crítico Set-DotEnvVar (rama installer)
 
 ### Corregido

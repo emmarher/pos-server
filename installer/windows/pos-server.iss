@@ -151,17 +151,19 @@ begin
   DeleteFile(TmpFile);
 end;
 
-{ Escribe el .env en la carpeta de programa desde env.template, sustituyendo marcas. Falla si no hay secretos. }
+{ Escribe el .env en la carpeta de programa, generado inline (sin archivo externo).
+  Guardia de renovación: si ya existe (reinstalación/upgrade), se CONSERVA
+  intacto — rotar secretos invalidaría sesiones y la cadena HMAC anti-rollback
+  de la licencia. Solo se genera en instalación fresca. }
 function WriteEnvFile(): Boolean;
 var
-  { LoadStringFromFile exige AnsiString en su parámetro var }
-  Template: AnsiString;
-  Content, DataDir, Jwt, Hmac, Port: String;
+  Content, DataDir, Jwt, Hmac, Port, ImagesFlag: String;
 begin
   Result := False;
-  if not LoadStringFromFile(ExpandConstant('{src}\env.template'), Template) then
+  if FileExists(ExpandConstant('{app}\.env')) then
   begin
-    MsgBox('No se pudo leer env.template junto al instalador.', mbError, MB_OK);
+    { Conservar: la licencia y sesiones existentes dependen de estos valores }
+    Result := True;
     Exit;
   end;
   Port := PortPage.Values[0];
@@ -180,16 +182,28 @@ begin
   { Rutas con doble backslash para .env (dotenv las lee tal cual en Windows) }
   DataDir := ExpandConstant('{commonappdata}\POS Server\data');
   StringChangeEx(DataDir, '\', '\\', True);
-  Content := Template;
-  StringChangeEx(Content, '{{PORT}}', Port, True);
-  StringChangeEx(Content, '{{JWT_SECRET}}', Jwt, True);
-  StringChangeEx(Content, '{{HMAC_SECRET}}', Hmac, True);
-  StringChangeEx(Content, '{{SQLITE_PATH}}', DataDir + '\\pos.sqlite', True);
-  StringChangeEx(Content, '{{LICENSE_FILE}}', DataDir + '\\pos.lic', True);
   if UseImages() then
-    StringChangeEx(Content, '{{IMAGES_ENABLED}}', 'true', True)
+    ImagesFlag := 'true'
   else
-    StringChangeEx(Content, '{{IMAGES_ENABLED}}', 'false', True);
+    ImagesFlag := 'false';
+  { JWT_EXPIRES_IN=43200 = 12h (sesión de turno completo; refresh 30d aparte) }
+  Content :=
+    '# .env generado por el instalador POS Server (no editar secretos a mano)' + #13#10 +
+    'PORT=' + Port + #13#10 +
+    'HOST=0.0.0.0' + #13#10 +
+    'DB_PROVIDER=sqlite' + #13#10 +
+    'SQLITE_PATH=' + DataDir + '\\pos.sqlite' + #13#10 +
+    'JWT_SECRET=' + Jwt + #13#10 +
+    'JWT_EXPIRES_IN=43200' + #13#10 +
+    'JWT_REFRESH_EXPIRES_IN=2592000' + #13#10 +
+    'DEVICE_LIMIT_DEFAULT=2' + #13#10 +
+    'LOG_LEVEL=info' + #13#10 +
+    'IMAGES_ENABLED=' + ImagesFlag + #13#10 +
+    'LICENSE_FILE_PATH=' + DataDir + '\\pos.lic' + #13#10 +
+    'PUBLIC_KEY_PATH=' + #13#10 +
+    'LICENSE_STRICT=true' + #13#10 +
+    'LICENSE_HMAC_SECRET=' + Hmac + #13#10 +
+    'SEED_DEMO_LICENSE_DAYS=0' + #13#10;
   Result := SaveStringToFile(ExpandConstant('{app}\.env'), Content, False);
   if not Result then
     MsgBox('No se pudo escribir {app}\.env', mbError, MB_OK);

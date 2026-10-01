@@ -42,8 +42,8 @@ pos-server/
         stop-server.bat
         backup.bat            # copia pos.sqlite + -wal a backups\%date%
         healthcheck.bat       # curl http://127.0.0.1:3000/health
-      env.template            # plantilla .env (pendiente)
-      README-INSTALADOR.md    # manual operador/tienda (pendiente)
+      README-INSTALADOR.md    # manual operador/tienda
+      # (.env se genera inline en pos-server.iss:WriteEnvFile; JWT 12h)
     stage/                    # (ignorado por git) artefacto intermedio
     output/                   # (ignorado por git) Setup_POS-Server-*.exe final
 ```
@@ -72,9 +72,11 @@ Puertos (ver `README.md` + `src/server.ts`):
   1. Generar `JWT_SECRET` aleatorio 64-hex — obligatorio, hoy
      `src/config/env.ts:91-97` aborta si falta o es `change-me`.
      Comando ref: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-  2. Escribir `.env` desde `env.template` (vars: `PORT, HOST, DB_PROVIDER=sqlite,`
-     `SQLITE_PATH, JWT_SECRET, JWT_EXPIRES_IN=86400, DEVICE_LIMIT_DEFAULT, LOG_LEVEL=info,`
-     `IMAGES_ENABLED=false`).
+  2. `.env` generado inline en Pascal (`WriteEnvFile`, sin archivo externo):
+     `PORT, HOST, DB_PROVIDER=sqlite, SQLITE_PATH, JWT_SECRET,`
+     `JWT_EXPIRES_IN=43200` (12h), `DEVICE_LIMIT_DEFAULT, LOG_LEVEL=info,`
+     `IMAGES_ENABLED` según toggle. Si ya existe (reinstalación), se CONSERVA
+     para no romper licencia/sesiones.
   3. Firewall: `netsh advfirewall firewall add rule` → TCP 3000 inbound (perfil privado)
      + UDP 5000 inbound (discovery).
   4. Migrar + seed: `node.exe dist\...\migrate.js && seed.js && seed-catalog.js`

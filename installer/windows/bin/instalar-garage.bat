@@ -1,7 +1,7 @@
 ﻿@echo off
 REM installer/windows/bin/instalar-garage.bat — LEGACY wrapper (Garage -> RustFS).
 REM Redirige a instalar-rustfs.bat.
-REM Log: %ProgramData%\POS Server\rustfs\install-rustfs.log
+REM Log: %ProgramData%\POS Server\garage\install-garage.log
 net session >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] Clic derecho sobre este archivo -^> "Ejecutar como administrador".
