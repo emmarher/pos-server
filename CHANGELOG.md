@@ -4,6 +4,24 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.2] — 2026-10-01 — Fixes instalación real (rama installer)
+
+### Corregido
+
+- **CreateProcess 193 al arrancar**: `[Run]` lanzaba el `.vbs` directo (no es
+  ejecutable Win32) → ahora vía `wscript.exe`. Era la causa de que el server
+  jamás quedara corriendo post-instalación (HTTP 000).
+- **Instalaba en `Program Files (x86)`**: faltaba
+  `ArchitecturesInstallIn64BitMode` → `{autopf}` resolvía a x86 igual. Ahora
+  instala en `C:\Program Files\POS Server`.
+- **DB vacía silenciosa** (`no such table: tenants`): migrate/seed iban en
+  `[Run]` sin chequear exit code. Ahora van por Pascal (`RunNodeScript`) con
+  validación y log en `{app}\install-db.log`, abortando con mensaje si fallan.
+
+### Versión
+
+- `0.2.1` → **`0.2.2`** (package.json, `.iss`, `/health`).
+
 ## [0.2.1] — 2026-10-01 — Diagnóstico y arranque (rama installer)
 
 ### Añadido

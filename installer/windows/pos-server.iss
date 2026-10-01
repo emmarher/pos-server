@@ -18,7 +18,7 @@
 ; Mantener AppVersion sincronizada con pos-server/package.json "version".
 
 #define AppName "POS Server"
-#define AppVersion "0.2.1"
+#define AppVersion "0.2.2"
 #define AppPublisher "POS"
 #define DataDir "{commonappdata}\\POS Server\\data"
 
@@ -35,6 +35,7 @@ SolidCompression=yes
 OutputDir=..\output
 OutputBaseFilename=Setup_POS-Server-{#AppVersion}
 ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 
 [Files]
@@ -75,13 +76,10 @@ Name: "{group}\Desinstalar POS Server"; Filename: "{uninstallexe}"
 Name: "{userstartup}\POS Server"; Filename: "{app}\bin\start-server.vbs"
 
 [Run]
-; Migrar + seed demo (crea tenant DEMO + admin; licencia demo nace vencida por
-; SEED_DEMO_LICENSE_DAYS=0 -> la instalacion fresca arranca en bootstrap).
-; Si falla, el operador ve el error de assertSchemaReady en el log del server.
-Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\migrate.js"; WorkingDir: "{app}"; StatusMsg: "Aplicando migraciones de base de datos..."; Flags: runhidden waituntilterminated
-Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\seed.js"; WorkingDir: "{app}"; StatusMsg: "Creando datos iniciales..."; Flags: runhidden waituntilterminated
-; Catálogo demo (productos demo para vender de inmediato — decisión producto F-I2b)
-Filename: "{app}\node\node.exe"; Parameters: "{app}\dist\database\seed-catalog.js"; WorkingDir: "{app}"; StatusMsg: "Cargando catálogo demo..."; Flags: runhidden waituntilterminated
+; Migrar + seed demo + catálogo: van por Pascal (RunNodeScript) con validación
+; de exit code y log en {app}\install-db.log. Antes iban directos sin chequear
+; resultado y una DB vacía pasaba silenciosa ("no such table: tenants").
+; (Las entradas [Run] clásicas no pueden abortar ante fallo.)
 ; Servicio nativo RustFS (tarea POSRustFS, auto-arranque en boot, binario 1.0.0 verificado).
 ; Va ANTES de rustfs-init para que este detecte la tarea y omita compose.
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\rustfs-service.ps1"" -Action Install"; WorkingDir: "{app}\bin"; StatusMsg: "Instalando servicio RustFS..."; Flags: runhidden waituntilterminated; Check: UseImages
@@ -89,7 +87,8 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Fil
 Filename: "{app}\bin\rustfs-init.bat"; WorkingDir: "{app}\bin"; StatusMsg: "Configurando almacenamiento de imágenes (RustFS)..."; Flags: waituntilterminated; Check: UseImages
 ; Auto-arranque inmediato: deja el server corriendo al terminar el wizard
 ; (antes solo quedaba el acceso Startup → exigía cerrar sesión/entrar).
-Filename: "{app}\bin\start-server.vbs"; StatusMsg: "Arrancando POS Server..."; Flags: nowait
+; OJO: el .vbs NO es ejecutable directo (CreateProcess 193): va vía wscript.exe.
+Filename: "wscript.exe"; Parameters: """{app}\bin\start-server.vbs"""; StatusMsg: "Arrancando POS Server..."; Flags: nowait
 
 [UninstallDelete]
 Type: files; Name: "{app}\.env"
@@ -239,6 +238,27 @@ begin
   Exec('netsh.exe', 'advfirewall firewall add rule name="POS Server Discovery" dir=in action=allow protocol=UDP localport=5000 profile=private', '', SW_HIDE, ewWaitUntilTerminated, Res);
 end;
 
+{ Ejecuta un script node (migrate/seed/catalog) con el portable, guardando
+  salida en install-db.log de la carpeta de programa. Retorna True solo si
+  exit code = 0. Sin esto, una DB vacía pasaba silenciosa y el server moría
+  en arranque ("no such table: tenants") con el instalador diciendo éxito. }
+function RunNodeScript(StepName, Script: String): Boolean;
+var
+  Res: Integer;
+  Cmd: String;
+begin
+  Result := False;
+  Cmd := '/c ""' + ExpandConstant('{app}\node\node.exe') + '" "' +
+    ExpandConstant('{app}\dist\database\' + Script) + '" >> "' +
+    ExpandConstant('{app}\install-db.log') + '" 2>&1"';
+  if Exec('cmd.exe', Cmd, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Res) and (Res = 0) then
+    Result := True
+  else
+    MsgBox(StepName + ' falló (código ' + IntToStr(Res) + '). Revisa ' +
+      ExpandConstant('{app}\install-db.log') + ' o cancela la instalación.',
+      mbError, MB_OK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
@@ -246,6 +266,13 @@ begin
     if not WriteEnvFile() then
       Abort;
     AddFirewallRules(PortPage.Values[0]);
+    { migrate + seed + catálogo con validación (aborta si la DB queda vacía) }
+    if not RunNodeScript('Migraciones', 'migrate.js') then
+      Abort;
+    if not RunNodeScript('Seed demo', 'seed.js') then
+      Abort;
+    if not RunNodeScript('Catálogo demo', 'seed-catalog.js') then
+      Abort;
     if UseImages() then
     begin
       { RustFS: Docker solo para dev; prod usa binario nativo rustfs.exe. No abortar si Docker falta — rustfs-init lo maneja. }
