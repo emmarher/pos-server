@@ -98,7 +98,7 @@ function healthRoute(app: FastifyInstance): void {
         status: db ? ('ok' as const) : ('degraded' as const),
         service: 'pos-server',
         db: db ? ('up' as const) : ('down' as const),
-        version: '0.2.2',
+        version: '0.2.3',
         timestamp: new Date().toISOString(),
       }
       return reply

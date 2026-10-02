@@ -4,6 +4,41 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.3] — 2026-10-01 — Discovery (puerto/IP + mDNS) y activación de licencia
+
+### Corregido
+
+- **UDP discovery anunciaba el puerto `3000` fijo** (`src/services/udp-discovery.ts`)
+  aunque el server escuchara en otro puerto (p. ej. `3003` en una instalación
+  real): el cliente probaba `http://<ip>:3000/health`, fallaba y **descartaba**
+  el servidor. Ahora la respuesta usa `env.port`.
+- **IP del server mal elegida**: `detectServerIp()` tomaba la primera IPv4
+  no-interna; con adaptadores virtuales (VMware/Hyper-V/VirtualBox) podía
+  anunciar una IP inalcanzable. Ahora se resuelve la interfaz en la misma
+  subred `/24` del solicitante (fallback a la primera no-interna).
+- **Diagnóstico con falso FAIL** (`installer/windows/bin/diagnostico.ps1`): el
+  chequeo "proceso node del server corriendo" solo miraba `CommandLine`, que
+  llega vacío si el proceso corre elevado/otro usuario. Ahora también valida el
+  PID dueño del puerto en LISTEN (proceso `node`), sin falso negativo.
+- **Build de licencias sin clave**: `scripts/generatePublicKey.js` ahora falla
+  (`exit 1`) si falta `tools/keys/mipos_public.pem`, en vez de generar
+  `PUBLIC_KEY_PEM` vacío (server que rechaza todo `.lic`). Escape hatch para
+  CI/tests: `ALLOW_MISSING_LICENSE_KEY=1`.
+
+### Añadido
+
+- **Sucursal configurable en la instalación**: página "Sucursal" del wizard
+  (campo nombre/código) que escribe `SEED_TENANT_CODE`/`SEED_TENANT_NAME` en el
+  `.env`; `seed.ts`/`seed-catalog.ts` crean el tenant con ese código (antes fijo
+  `DEMO-0001`). Ese código es el **usuario de login** y debe coincidir con el
+  `license_key` del `.lic` emitido por el proveedor.
+- **mDNS**: el server ya anunciaba `_pos-server._tcp.local`; se documenta como
+  capa de discovery en el desktop (resolución vía `mdns_discover`).
+
+### Versión
+
+- `0.2.2` → **`0.2.3`** (package.json, `.iss`, `/health`).
+
 ## [0.2.2] — 2026-10-01 — Fixes instalación real (rama installer)
 
 ### Corregido

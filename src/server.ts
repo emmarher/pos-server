@@ -17,6 +17,7 @@ import { buildApp } from './app.js'
 import { env } from './config/env.js'
 import { db } from './database/client.js'
 import { startDiscovery, stopDiscovery } from './services/udp-discovery.js'
+import { startMdnsAdvertise, stopMdnsAdvertise } from './services/mdns-advertise.js'
 import { validateLicenseAtStartup } from './modules/license/license.service.js'
 import { startLicenseMonitor } from './services/license-monitor.js'
 import { ensureImagesBucket } from './services/storage.service.js'
@@ -91,6 +92,20 @@ assertSchemaReady()
         .catch((discoveryErr) => {
           app.log.error(discoveryErr, 'No se pudo iniciar UDP Discovery')
         })
+
+      // mDNS (fallback cuando el broadcast UDP se filtra): anuncia
+      // _pos-server._tcp.local con tenant en TXT. Best-effort, nunca bloquea.
+      void db
+        .query<{ license_key: string }>(
+          'SELECT license_key FROM tenants WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1',
+        )
+        .then(
+          (r) => {
+            startMdnsAdvertise({ tenantCode: r.rows[0]?.license_key ?? null })
+            app.log.info('mDNS anunciado (_pos-server._tcp.local)')
+          },
+          (mdnsErr) => app.log.warn(mdnsErr, 'No se pudo anunciar mDNS'),
+        )
     })
   })
   .catch(() => process.exit(1))
@@ -103,6 +118,7 @@ async function shutdown(signal: string): Promise<void> {
   try {
     licenseMonitor?.stop()
     await stopDiscovery()
+    stopMdnsAdvertise()
     await app.close()
     await db.end()
     process.exit(0)

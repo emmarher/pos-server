@@ -12,13 +12,17 @@ import * as dgram from 'dgram'
 import * as os from 'node:os'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../database/client.js'
+import { env } from '../config/env.js'
 
 // Configuración del descubrimiento
 const DISCOVER_PORT = 5000;
 const DISCOVER_MESSAGE = "POS_DISCOVER";
 
-// Puerto HTTP del API Fastify — el que la tablet usará para conectarse
-const API_PORT = 3000;
+// Puerto HTTP del API Fastify — el que el cliente usará para conectarse.
+// Debe ser el puerto REAL del server (env.port), no un 3000 fijo: si la
+// instalación usa otro puerto, la respuesta con 3000 hacía que el cliente
+// probara /health en un puerto muerto y descartara el servidor.
+const API_PORT = env.port;
 
 // Interfaz para la respuesta de descubrimiento
 export interface DiscoveryResponse {
@@ -33,31 +37,66 @@ export interface DiscoveryResponse {
 let discoverSocket: dgram.Socket | null = null;
 let isRunning = false;
 
-// IP del servidor en la LAN (se detecta al iniciar; usada en la respuesta)
-let serverIp: string = '127.0.0.1';
-
 // Cache del tenant activo (se obtiene al iniciar el servicio)
 let activeTenantId: string | null = null;
 let activeTenantName: string | null = null;
 
+/** IPv4 → entero de 32 bits (null si no es IPv4 válida). */
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let acc = 0;
+  for (const part of parts) {
+    const v = Number(part);
+    if (!Number.isInteger(v) || v < 0 || v > 255) return null;
+    acc = (acc << 8) | v;
+  }
+  return acc >>> 0;
+}
+
+/** ¿Ambas IPv4 están en la misma /24? */
+function sameSubnet24(a: string, b: string): boolean {
+  const ia = ipv4ToInt(a);
+  const ib = ipv4ToInt(b);
+  if (ia === null || ib === null) return false;
+  return (ia & 0xffffff00) === (ib & 0xffffff00);
+}
+
+/** Primera IPv4 no-loopback de cualquier interfaz (fallback). */
+function firstNonInternalIpv4(): string | null {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const net of interfaces[name] ?? []) {
+      if (net.family === 'IPv4' && !net.internal) return net.address;
+    }
+  }
+  return null;
+}
+
 /**
- * Detecta la IP local del servidor en la LAN (la primera interfaz IPv4
- * no-loopback). Es la IP que la tablet guardará para conectarse por HTTP.
+ * Devuelve la IP local del servidor que el cliente puede alcanzar.
+ * Prefiere la interfaz cuya /24 coincide con la del solicitante (evita
+ * anunciar una IP de adaptador virtual inalcanzable cuando hay varias
+ * interfaces); si ninguna coincide, cae a la primera IPv4 no-loopback.
  */
-function detectServerIp(): string {
+function resolveIpForClient(remoteAddress: string): string {
   try {
     const interfaces = os.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
       for (const net of interfaces[name] ?? []) {
-        if (net.family === 'IPv4' && !net.internal) {
+        if (
+          net.family === 'IPv4' &&
+          !net.internal &&
+          sameSubnet24(net.address, remoteAddress)
+        ) {
           return net.address;
         }
       }
     }
   } catch {
-    /* sin red local → loopback */
+    /* sin red local → fallback */
   }
-  return '127.0.0.1';
+  return firstNonInternalIpv4() ?? '127.0.0.1';
 }
 
 /**
@@ -110,9 +149,6 @@ export async function startDiscovery(): Promise<void> {
   // Primero obtener el tenant activo
   await initializeTenant();
 
-  // Detectar la IP del servidor en la LAN para la respuesta
-  serverIp = detectServerIp();
-
   // Crear socket UDP
   const socket = dgram.createSocket("udp4");
   discoverSocket = socket;
@@ -126,7 +162,7 @@ export async function startDiscovery(): Promise<void> {
         const deviceName = activeTenantName ? `POS-Server-${activeTenantName}` : `POS-Server-${tenantId}`;
 
         const response: DiscoveryResponse = {
-          ip: serverIp,
+          ip: resolveIpForClient(rinfo.address),
           port: API_PORT,
           tenant_id: tenantId,
           device_name: deviceName,
@@ -217,7 +253,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance): void {
         qrCode: generateDiscoveryQR(),
         manualInput: {
           defaultIp: '127.0.0.1',
-          defaultPort: 3000,
+          defaultPort: API_PORT,
         },
       },
     };
@@ -236,7 +272,7 @@ function generateDiscoveryQR(): string {
     connection: {
       protocol: "http",
       host: "localhost",
-      port: 3000,
+      port: API_PORT,
     },
   });
 }

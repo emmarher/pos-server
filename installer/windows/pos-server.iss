@@ -18,7 +18,7 @@
 ; Mantener AppVersion sincronizada con pos-server/package.json "version".
 
 #define AppName "POS Server"
-#define AppVersion "0.2.2"
+#define AppVersion "0.2.3"
 #define AppPublisher "POS"
 #define DataDir "{commonappdata}\\POS Server\\data"
 
@@ -96,7 +96,9 @@ Type: files; Name: "{app}\.env"
 [Code]
 var
   PortPage: TInputQueryWizardPage;
+  SucursalPage: TInputQueryWizardPage;
   ImagesPage: TInputOptionWizardPage;
+  LicensePage: TInputFileWizardPage;
 
 { Página wizard: puerto API + toggle de imágenes }
 procedure InitializeWizard;
@@ -107,13 +109,33 @@ begin
   PortPage.Add('Puerto API:', False);
   PortPage.Values[0] := '3000';
 
-  ImagesPage := CreateInputOptionPage(PortPage.ID,
+  { Sucursal: nombre/código que será el tenant (license_key) y el usuario de
+    login del POS. Debe coincidir con el `license_key` del .lic que emita el
+    proveedor; si no, el servidor rechazará la licencia. }
+  SucursalPage := CreateInputQueryPage(PortPage.ID,
+    'Sucursal', '¿Cómo se identifica esta sucursal?',
+    'Será el usuario/código de acceso (tenant) del POS. Debe ser EXACTAMENTE el mismo ' +
+    'que use el proveedor al emitir tu archivo de licencia (.lic).');
+  SucursalPage.Add('Nombre / código de sucursal:', False);
+  SucursalPage.Values[0] := 'DEMO-0001';
+
+  ImagesPage := CreateInputOptionPage(SucursalPage.ID,
     'Imágenes de productos', '¿Activar almacenamiento de imágenes (RustFS)?',
     'Dev: Docker; Prod: binario nativo rustfs.exe (sin Docker). Si se omite, el servidor opera sin ' +
     'imágenes (se puede activar después con "Configurar imágenes (RustFS)").',
     False, False);
   ImagesPage.Add('Incluir RustFS (fotos de productos)');
   ImagesPage.Values[0] := False;
+
+  { Licencia inicial opcional (página con selector de archivo nativo).
+    Si se da, se copia a ProgramData antes del primer arranque; si se omite,
+    el wizard del desktop la pedirá después (sin bloquear la instalación). }
+  LicensePage := CreateInputFilePage(ImagesPage.ID,
+    'Licencia inicial', '¿Tienes el archivo de licencia (.lic) de la sucursal?',
+    'Opcional: si lo seleccionas se activa solo. Si no, el POS lo pedirá al abrir por primera vez.');
+  LicensePage.Add('Archivo .lic (vacío = activar después):',
+    'Licencia (*.lic)|*.lic|Todos (*.*)|*.*', '.lic');
+  LicensePage.Values[0] := '';
 end;
 
 { True si el wizard activó imágenes. Lo usan Check: de [Files]/[Icons]/[Run]. }
@@ -160,7 +182,7 @@ end;
   de la licencia. Solo se genera en instalación fresca. }
 function WriteEnvFile(): Boolean;
 var
-  Content, DataDir, Jwt, Hmac, Port, ImagesFlag: String;
+  Content, DataDir, Jwt, Hmac, Port, ImagesFlag, Sucursal: String;
 begin
   Result := False;
   if FileExists(ExpandConstant('{app}\.env')) then
@@ -173,6 +195,13 @@ begin
   if (StrToIntDef(Port, 0) <= 0) or (StrToIntDef(Port, 0) > 65535) then
   begin
     MsgBox('Puerto inválido. Usa 1-65535 (default 3000).', mbError, MB_OK);
+    Exit;
+  end;
+  Sucursal := Trim(SucursalPage.Values[0]);
+  if Sucursal = '' then
+  begin
+    MsgBox('Indica el nombre/código de sucursal: será el usuario de login y debe ' +
+      'coincidir con el de la licencia (.lic).', mbError, MB_OK);
     Exit;
   end;
   Jwt := GenHexSecret(ExpandConstant('{app}\node\node.exe'));
@@ -206,7 +235,9 @@ begin
     'PUBLIC_KEY_PATH=' + #13#10 +
     'LICENSE_STRICT=true' + #13#10 +
     'LICENSE_HMAC_SECRET=' + Hmac + #13#10 +
-    'SEED_DEMO_LICENSE_DAYS=0' + #13#10;
+    'SEED_DEMO_LICENSE_DAYS=0' + #13#10 +
+    'SEED_TENANT_CODE=' + Sucursal + #13#10 +
+    'SEED_TENANT_NAME=' + Sucursal + #13#10;
   Result := SaveStringToFile(ExpandConstant('{app}\.env'), Content, False);
   if not Result then
     MsgBox('No se pudo escribir {app}\.env', mbError, MB_OK);
@@ -259,6 +290,28 @@ begin
       mbError, MB_OK);
 end;
 
+{ Copia el .lic inicial dado en el wizard a ProgramData. Opcional: vacío =
+  activar después en el desktop; inválido = solo avisa (el servidor lo
+  validará al arrancar y el wizard lo pedirá de nuevo). Nunca aborta. }
+procedure CopyInitialLicense();
+var
+  Src, Dest: String;
+begin
+  Src := Trim(LicensePage.Values[0]);
+  if Src = '' then
+    Exit;
+  if not FileExists(Src) then
+  begin
+    MsgBox('El archivo de licencia no existe, se omitió. Podrás activarlo en el POS al abrirlo.',
+      mbInformation, MB_OK);
+    Exit;
+  end;
+  Dest := ExpandConstant('{commonappdata}\POS Server\data\pos.lic');
+  if not FileCopy(Src, Dest, False) then
+    MsgBox('No se pudo copiar la licencia inicial. Podrás activarla en el POS al abrirlo.',
+      mbInformation, MB_OK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
@@ -266,6 +319,8 @@ begin
     if not WriteEnvFile() then
       Abort;
     AddFirewallRules(PortPage.Values[0]);
+    { .lic inicial opcional (no bloquea) }
+    CopyInitialLicense();
     { migrate + seed + catálogo con validación (aborta si la DB queda vacía) }
     if not RunNodeScript('Migraciones', 'migrate.js') then
       Abort;

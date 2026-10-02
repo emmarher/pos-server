@@ -23,8 +23,18 @@
 import bcrypt from 'bcryptjs'
 import { db } from './client.js'
 
-/** Código de tenant demo (el PRD lo llama tenant_code; aquí es license_key) */
-export const DEMO_TENANT_CODE = 'DEMO-0001'
+/**
+ * Código de tenant (el PRD lo llama tenant_code; aquí es license_key).
+ * Configurable en la instalación vía SEED_TENANT_CODE (el instalador lo escribe
+ * en .env desde el campo "sucursal"); default DEMO-0001 para dev/tests.
+ * Debe coincidir con el `license_key` del .lic que emita el proveedor.
+ */
+export const DEMO_TENANT_CODE =
+  (process.env.SEED_TENANT_CODE ?? 'DEMO-0001').trim() || 'DEMO-0001'
+
+/** Nombre visible del tenant/negocio (default dev/tests). */
+const TENANT_NAME =
+  (process.env.SEED_TENANT_NAME ?? 'Tenant Demo').trim() || 'Tenant Demo'
 
 /** PINs de prueba (4-6 dígitos, RF-AU-002) */
 const ADMIN_PIN = '1234'
@@ -73,7 +83,7 @@ export async function seedDemo(): Promise<void> {
     await tx.query(
       `INSERT INTO tenants (name, license_key, license_expires_at, max_devices, max_branches, is_active, created_at, updated_at)
        VALUES ($1, $2, $3, $4, 1, 1, $5, $5)`,
-      ['Tenant Demo', DEMO_TENANT_CODE, expiresAt, 3, nowIso],
+      [TENANT_NAME, DEMO_TENANT_CODE, expiresAt, 3, nowIso],
     )
     const tenantRows = await tx.query<{ id: string }>(
       'SELECT id FROM tenants WHERE license_key = $1',
@@ -87,7 +97,7 @@ export async function seedDemo(): Promise<void> {
        VALUES ($1, $2, $3, $4, $5, $6, $6)`,
       [
         tenantId,
-        'Tienda Demo S.A.',
+        TENANT_NAME,
         'Av. Principal 123',
         '555-1234',
         'Gracias por su compra',

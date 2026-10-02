@@ -50,14 +50,32 @@ if (Test-Path -LiteralPath $EnvFile) {
 Write-Output "Puerto API: $Port"
 Write-Output ''
 
-# 2) Proceso del server (por línea de comando exacta, no cualquier node.exe)
+# 2) Proceso del server: por línea de comando O por el dueño del puerto en LISTEN.
+#    CommandLine puede venir vacío/NULL si el proceso corre elevado o bajo otro
+#    usuario (Win32_Process no lo expone sin privilegios) -> falso FAIL aunque el
+#    puerto esté escuchando y /health responda 200. Por eso también se mira el PID
+#    que posee el puerto y se comprueba que sea node.exe.
 $procs = @()
 try {
   $procs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction Stop |
     Where-Object { $_.CommandLine -like '*dist\server.js*' -or $_.CommandLine -like '*dist/server.js*' })
 } catch {}
-Test-Ok 'proceso node del server corriendo' ($procs.Count -gt 0) 'arráncalo: menú inicio → Iniciar POS Server (fondo)'
-if ($procs.Count -gt 0) { Write-Output ("       PID(s): " + (($procs | ForEach-Object { $_.ProcessId }) -join ', ')) }
+
+$nodePortPids = @()
+try {
+  $portPids = @(Get-NetTCPConnection -LocalPort ([int]$Port) -State Listen -ErrorAction Stop |
+    Select-Object -ExpandProperty OwningProcess -Unique)
+  foreach ($ownerPid in $portPids) {
+    try {
+      if ((Get-Process -Id $ownerPid -ErrorAction Stop).ProcessName -eq 'node') { $nodePortPids += $ownerPid }
+    } catch {}
+  }
+} catch {}
+
+$serverRunning = ($procs.Count -gt 0) -or ($nodePortPids.Count -gt 0)
+Test-Ok 'proceso node del server corriendo' $serverRunning 'arráncalo: menú inicio → Iniciar POS Server (fondo)'
+$allPids = @(@($procs | ForEach-Object { $_.ProcessId }) + $nodePortPids | Sort-Object -Unique)
+if ($allPids.Count -gt 0) { Write-Output ("       PID(s): " + ($allPids -join ', ')) }
 
 # 3) Puerto en escucha
 $listening = $false

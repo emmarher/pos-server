@@ -60,18 +60,28 @@ function main() {
   // --- main ---
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
   if (!fs.existsSync(mainPemPath)) {
-    const warning =
-      '\x1b[33m⚠  No se encontró la clave pública en ' + mainPemPath + '\x1b[0m\n' +
-      '\x1b[33m   El server arrancará en modo degradado (no verificará firmas de licencias).\x1b[0m\n' +
+    const allowMissing = (process.env.ALLOW_MISSING_LICENSE_KEY ?? '').trim().toLowerCase()
+    const allowed = allowMissing === '1' || allowMissing === 'true'
+    const message =
+      '\x1b[31m✗  No se encontró la clave pública de licencias en ' + mainPemPath + '\x1b[0m\n' +
+      '\x1b[33m   Sin clave, el server NO puede verificar firmas Ed25519: rechazará todo .lic\n' +
+      '   y con LICENSE_STRICT=true desactivará el tenant (login bloqueado).\x1b[0m\n' +
       '\x1b[33m   Genera las claves con: node tools/generate-keys.js\x1b[0m\n' +
-      '\x1b[33m   O configura PUBLIC_KEY_PATH en .env\x1b[0m\n'
-    process.stderr.write(warning)
+      '\x1b[33m   O define PUBLIC_KEY_PATH en .env\x1b[0m\n' +
+      '\x1b[33m   Para permitir el build degradado (CI/tests): ALLOW_MISSING_LICENSE_KEY=1\x1b[0m\n'
+    if (!allowed) {
+      process.stderr.write(message)
+      process.exit(1)
+    }
+    process.stderr.write(
+      '\x1b[33m⚠  Sin clave pública de licencias — build degradado (ALLOW_MISSING_LICENSE_KEY).\x1b[0m\n',
+    )
     fs.writeFileSync(
       outputPath,
       mainHeader + 'export const PUBLIC_KEY_PEM = \'\'; // CLAVE FALTANTE — regenerar: npm run build:keys\n',
       'utf8',
     )
-    console.log('[generatePublicKey] ✓ Generado con clave vacía (modo degradado).')
+    console.log('[generatePublicKey] ✓ Generado con clave vacía (modo degradado, ALLOW_MISSING_LICENSE_KEY=1).')
   } else {
     const pem = fs.readFileSync(mainPemPath, 'utf8').trim()
     const escaped = pem.replace(/\\/g, '\\\\').replace(/`/g, '\\`')
