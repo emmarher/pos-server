@@ -189,6 +189,8 @@ export const productCreateBodySchema: ApiDataSchema = {
     unit_conversion: { type: 'number', exclusiveMinimum: 0 },
     price: { type: 'number', minimum: 0 },
     cost: { type: 'number', minimum: 0 },
+    /** Stock inicial (solo se aplica al CREAR; en PATCH se ignora/rechaza). */
+    stock: { type: 'number', minimum: 0 },
     min_stock: { type: 'number', minimum: 0 },
     max_stock: { type: ['number', 'null'], minimum: 0 },
     is_scale_enabled: { type: 'boolean' },

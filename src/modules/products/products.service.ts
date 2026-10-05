@@ -51,6 +51,8 @@ export interface ProductInput {
   unit_conversion?: number
   price?: number
   cost?: number
+  /** Stock inicial (solo al CREAR; en update se rechaza, stock va por ajustes). */
+  stock?: number
   min_stock?: number
   max_stock?: number | null
   is_scale_enabled?: boolean
@@ -639,7 +641,7 @@ export async function createProduct(
             base_unit_id, sale_unit_id, unit_conversion, price, cost, stock, min_stock,
             max_stock, is_scale_enabled, allow_fractional_sale, is_active, created_at, updated_at)
          VALUES
-           ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, $13, $14, $15, $16, $17, $18, $18)
+           ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19)
          RETURNING id`,
         [
           tenantId,
@@ -654,6 +656,7 @@ export async function createProduct(
           input.unit_conversion ?? 1,
           input.price ?? 0,
           input.cost ?? 0,
+          input.stock ?? 0,
           input.min_stock ?? 0,
           input.max_stock ?? null,
           input.is_scale_enabled ? 1 : 0,
@@ -700,6 +703,14 @@ export async function updateProduct(
   id: string,
   input: Partial<ProductInput>,
 ): Promise<Product> {
+  // El stock NO se edita por aquí (el schema de body lo comparte con create):
+  // se ajusta desde Inventario, que registra el movimiento correspondiente.
+  if (input.stock !== undefined) {
+    throw new HttpError(
+      'VALIDATION_ERROR',
+      'El stock no se edita aquí; usa "Ajustar stock" en Inventario',
+    )
+  }
   // Existencia + aislamiento
   const current = await getProduct(tenantId, id)
   if (
