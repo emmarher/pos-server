@@ -225,7 +225,7 @@ describe('license', () => {
       expect(res.statusCode).toBe(403)
     })
 
-    it('rechaza license_key mismatch', async () => {
+    it('adopta el license_key del .lic (el .lic manda)', async () => {
       const user = await createTenantFixture(app, `TEST-MISMATCH-${randomUUID().slice(0, 6)}`)
       const payload = {
         schema: 1,
@@ -246,7 +246,13 @@ describe('license', () => {
         headers: { authorization: `Bearer ${user.token}` },
         payload: { license_data: lic },
       })
-      expect(res.statusCode).toBe(403)
+      // El .lic es la fuente de verdad: el tenant ADOPTA su license_key (200).
+      expect(res.statusCode).toBe(200)
+      const { rows } = await db.query<{ c: number }>(
+        'SELECT COUNT(*) AS c FROM tenants WHERE license_key = $1',
+        ['OTRA-KEY-DISTINTA'],
+      )
+      expect(rows[0]?.c).toBe(1)
     })
 
     it('rechaza seats downgrade cuando hay dispositivos activos', async () => {

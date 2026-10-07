@@ -724,6 +724,26 @@ export async function validateLicenseAtStartup(app: FastifyInstance): Promise<Li
   // Step 1: ¿Existe el archivo .lic?
   const licContent = loadLicenseFile()
   if (!licContent) {
+    // Respetar una licencia ya aplicada en BD (p. ej. subida por el wizard en
+    // una versión previa): si license_state es válida y vigente, NO desactivar
+    // el tenant aunque falte el archivo. Evita el 403 fantasma en login.
+    const { rows: stateRows } = await db.query<{ is_valid: number; expires_at: string }>(
+      'SELECT is_valid, expires_at FROM license_state WHERE tenant_id = $1',
+      [tenantId],
+    )
+    const st = stateRows[0]
+    if (st && st.is_valid === 1 && new Date(st.expires_at).getTime() > Date.now()) {
+      // Reactivar: el tenant pudo quedar inactivo por un arranque previo sin
+      // archivo (o por una versión que no persistía el .lic).
+      await db.query(
+        `UPDATE tenants SET is_active = 1, license_expires_at = $1, updated_at = $2 WHERE id = $3`,
+        [st.expires_at, new Date().toISOString(), tenantId],
+      )
+      app.log.warn(
+        `Sin archivo .lic en ${env.licenseFilePath}, pero license_state válido — tenant reactivado`,
+      )
+      return 'active'
+    }
     if (env.licenseStrict) {
       app.log.error(
         `Sin archivo .lic en ${env.licenseFilePath} — LICENSE_STRICT=true, bloqueando tenant`,
@@ -815,16 +835,22 @@ export async function validateLicenseAtStartup(app: FastifyInstance): Promise<Li
 
   const payload = verification.payload
 
-  // Verificar que la license_key del .lic coincide con el tenant
+  // El .lic es la fuente de verdad del código de tenant: si su license_key
+  // difiere, el tenant la ADOPTA (EXE genérico + licencia con el código).
   if (payload.license_key !== tenantLicenseKey) {
-    app.log.error(
-      `License key mismatch: .lic tiene "${payload.license_key}" pero el tenant es "${tenantLicenseKey}"`,
+    app.log.warn(
+      `Adoptando license_key del .lic: "${tenantLicenseKey}" -> "${payload.license_key}"`,
     )
-    await db.transaction(async (tx) => {
-      await applyLicenseToTenant(tx, tenantId, payload, false)
-      await logLicenseAudit(tenantId, 'INVALID_SIGNATURE', 'license_key mismatch', 'ERROR', tx)
-    })
-    return 'invalid'
+    await db.query(
+      'UPDATE tenants SET license_key = $1, updated_at = $2 WHERE id = $3',
+      [payload.license_key, new Date().toISOString(), tenantId],
+    )
+    await logLicenseAudit(
+      tenantId,
+      'LOADED',
+      `license_key adoptada del .lic: "${tenantLicenseKey}" -> "${payload.license_key}"`,
+      'WARN',
+    )
   }
 
   // Step 4: ¿Schema soportado?
@@ -1122,9 +1148,24 @@ export async function uploadLicense(
     [tenantId],
   )
   const tenant = tenantRows[0]
-  if (!tenant || payload.license_key !== tenant.license_key) {
-    await logLicenseAudit(tenantId, 'INVALID_SIGNATURE', 'Upload: license_key mismatch', 'ERROR')
+  if (!tenant) {
+    await logLicenseAudit(tenantId, 'INVALID_SIGNATURE', 'Upload: tenant no encontrado', 'ERROR')
     throw new HttpError('LICENSE_EXPIRED', 'Licencia inválida. Contacte a soporte.')
+  }
+  // El .lic es la fuente de verdad del código de tenant: si su license_key
+  // difiere, el tenant la ADOPTA. Permite distribuir un EXE genérico y que la
+  // licencia traiga el código (cliente/sucursal) sin posibilidad de mismatch.
+  if (payload.license_key !== tenant.license_key) {
+    await db.query(
+      'UPDATE tenants SET license_key = $1, updated_at = $2 WHERE id = $3',
+      [payload.license_key, new Date().toISOString(), tenantId],
+    )
+    await logLicenseAudit(
+      tenantId,
+      'UPLOADED',
+      `license_key adoptada del .lic: "${tenant.license_key}" -> "${payload.license_key}"`,
+      'INFO',
+    )
   }
 
   // Step 4: Schema soportado
@@ -1164,6 +1205,23 @@ export async function uploadLicense(
       tx,
     )
   })
+
+  // Persistir el .lic en disco: validateLicenseAtStartup lo lee al arrancar y,
+  // sin archivo (con LICENSE_STRICT=true), volvería a desactivar el tenant en el
+  // próximo reinicio → login 403 aunque la licencia siga válida en BD.
+  try {
+    mkdirSync(dirname(env.licenseFilePath), { recursive: true })
+    writeFileSync(env.licenseFilePath, licContent, 'utf8')
+  } catch (err) {
+    await logLicenseAudit(
+      tenantId,
+      'UPLOADED',
+      `No se pudo persistir el .lic en ${env.licenseFilePath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      'WARN',
+    )
+  }
 
   return getLicenseStatus(tenantId)
 }

@@ -18,7 +18,7 @@
 ; Mantener AppVersion sincronizada con pos-server/package.json "version".
 
 #define AppName "POS Server"
-#define AppVersion "0.2.3"
+#define AppVersion "0.2.6"
 #define AppPublisher "POS"
 #define DataDir "{commonappdata}\\POS Server\\data"
 
@@ -60,6 +60,10 @@ Source: "..\stage\rustfs\rustfs.exe"; DestDir: "{app}\rustfs"; Flags: ignorevers
 [Dirs]
 Name: "{#DataDir}"; Permissions: users-modify
 Name: "{commonappdata}\POS Server\backups"; Permissions: users-modify
+; logs DEBE ser escribible por usuarios: el server arranca a veces elevado y
+; crea el log como admin; un arranque NO elevado fallaba con "Access is denied"
+; al redirigir el log -> el server no levantaba.
+Name: "{commonappdata}\POS Server\logs"; Permissions: users-modify
 
 [Icons]
 Name: "{group}\Iniciar POS Server"; Filename: "{app}\bin\start-server.bat"
@@ -312,10 +316,45 @@ begin
       mbInformation, MB_OK);
 end;
 
+{ Otorga Modify a BUILTIN\Users (SID *S-1-5-32-545) en toda la carpeta de datos,
+  para que un arranque NO elevado pueda escribir logs/BD aunque un arranque
+  previo elevado haya creado archivos como admin. Idempotente. }
+procedure GrantUsersModify();
+var
+  Res: Integer;
+begin
+  Exec('icacls.exe',
+    '"' + ExpandConstant('{commonappdata}\POS Server') + '" /grant *S-1-5-32-545:(OI)(CI)M /T /C',
+    '', SW_HIDE, ewWaitUntilTerminated, Res);
+end;
+
+{ Detiene el POS Server si está corriendo (usa el stop-server.ps1 instalado,
+  que lo ubica por el puerto/PID). Evita que el desinstalador deje node.exe
+  corriendo o que un upgrade quede con archivos bloqueados. }
+procedure StopRunningServer();
+var
+  Res: Integer;
+  Ps1: String;
+begin
+  Ps1 := ExpandConstant('{app}\bin\stop-server.ps1');
+  if FileExists(Ps1) then
+    Exec('powershell.exe',
+      '-NoProfile -ExecutionPolicy Bypass -File "' + Ps1 + '"',
+      '', SW_HIDE, ewWaitUntilTerminated, Res);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssInstall then
+  begin
+    { Upgrade: detener el server previo para no bloquear archivos/logs. }
+    StopRunningServer();
+  end;
   if CurStep = ssPostInstall then
   begin
+    { Permisos de escritura para usuarios (logs/BD) — evita "Access is denied"
+      al arrancar el server sin elevación. }
+    GrantUsersModify();
     if not WriteEnvFile() then
       Abort;
     AddFirewallRules(PortPage.Values[0]);
@@ -342,6 +381,11 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Res: Integer;
 begin
+  if CurUninstallStep = usUninstall then
+  begin
+    { Detener el server ANTES de borrar archivos: si no, queda node.exe vivo. }
+    StopRunningServer();
+  end;
   if CurUninstallStep = usPostUninstall then
   begin
     Exec('netsh.exe', 'advfirewall firewall delete rule name="POS Server API"', '', SW_HIDE, ewWaitUntilTerminated, Res);

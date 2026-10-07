@@ -11,6 +11,8 @@ appDir = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName)
 logDir = shell.ExpandEnvironmentStrings("%ProgramData%") & "\POS Server\logs"
 If Not fso.FolderExists(logDir) Then fso.CreateFolder(logDir)
 logFile = logDir & "\server-" & Year(Date) & Right("0" & Month(Date), 2) & Right("0" & Day(Date), 2) & ".log"
-cmd = "cmd /c """"" & appDir & "\node\node.exe"" """ & appDir & "\dist\server.js"" >> """ & logFile & """ 2>&1"""
+' /s: hace determinista el manejo de comillas de cmd (sin /s, el patrón
+' cmd /c "…" con comillas anidadas puede destrozar el comando y no arrancar nada).
+cmd = "cmd /s /c """"" & appDir & "\node\node.exe"" """ & appDir & "\dist\server.js"" >> """ & logFile & """ 2>&1"""
 shell.CurrentDirectory = appDir
 shell.Run cmd, 0, False

@@ -4,6 +4,74 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.6] — 2026-10-07 — La licencia manda: el server adopta el código del tenant
+
+### Cambiado
+
+- **El `.lic` es la fuente de verdad del código de tenant**: al arrancar con un `.lic` o al
+  subirlo por `/license/upload`, el server **adopta su `license_key`** (renombra el tenant)
+  en vez de rechazar por "mismatch". Así se distribuye **un EXE genérico** y la licencia
+  trae el código (cliente/sucursal); imposible el error "Licencia inválida" por un código
+  distinto al de la licencia.
+
+### Corregido
+
+- **Instalar/desinstalar detiene el server**: el instalador lo detiene antes de copiar
+  (upgrade) y el desinstalador lo detiene antes de borrar → ya no quedan `node.exe`
+  corriendo ni archivos bloqueados.
+
+### Versión
+
+- `0.2.5` → **`0.2.6`**.
+
+## [0.2.5] — 2026-10-06 — Login 403 tras reinicio (persistir el .lic al subirlo)
+
+### Corregido
+
+- **`POST /license/upload` no persistía el archivo `.lic`**: la licencia quedaba
+  aplicada en BD pero, al reiniciar el server con `LICENSE_STRICT=true` y sin archivo,
+  `validateLicenseAtStartup` **desactivaba el tenant** → `POST /auth/login` devolvía
+  **403 "Licencia vencida"** aunque `/license/status` (que lee `license_state`) siguiera
+  diciendo `active`. El desktop mostraba el wizard, lo cerraba y caía al login sin mensaje.
+  Ahora el upload **escribe el `.lic` en `LICENSE_FILE_PATH`** (igual que el trial).
+- **Arranque consistente**: si no hay archivo `.lic` pero existe un `license_state`
+  válido y vigente, `validateLicenseAtStartup` **no desactiva y REACTIVA** el tenant
+  (corrige el 403 fantasma de instalaciones que subieron la licencia por el wizard en
+  versiones previas).
+- **Instalador — permisos de `logs`**: `%ProgramData%\POS Server\logs` no se creaba con
+  permiso de escritura para usuarios; el server (a veces elevado) creaba el log como admin
+  y un arranque **no elevado** fallaba con **"Access is denied"** al redirigir la salida →
+  el server no levantaba ("Iniciar POS Server" no hacía nada). Ahora se crea con
+  `users-modify` y se re-aplica `icacls … Users:(OI)(CI)M` a toda la carpeta de datos.
+- **`start-server.bat`**: el nombre del log usaba `%date:~6,4%…` (dependiente del formato
+  de fecha local) → en algunos locales generaba una ruta inválida y el server no arrancaba.
+  Ahora la fecha se obtiene de forma robusta. `start-server.vbs`: `cmd /s /c` para un manejo
+  de comillas determinista.
+
+### Versión
+
+- `0.2.4` → **`0.2.5`** (package.json, `.iss`, `/health`).
+
+## [0.2.4] — 2026-10-04 — Stock inicial al crear producto + stop-server fiable
+
+### Añadido
+
+- **Stock inicial al crear producto**: `POST /products` acepta `stock` y lo persiste
+  (antes el `INSERT` lo fijaba en 0, así que el stock capturado en el alta se perdía).
+  En `PATCH` se rechaza con mensaje claro: el stock se ajusta desde Inventario.
+
+### Corregido
+
+- **Detener POS Server** (`installer/windows/bin/stop-server.bat` + `stop-server.ps1`):
+  el script dependía de `WINDOWTITLE` (el server corre oculto vía `.vbs`, sin título) y de
+  `wmic ExecutablePath` (obsoleto en Windows recientes y vacío para procesos elevados)
+  → no detenía nada. Ahora ubica el proceso por el dueño del puerto TCP del API, el UDP 5000
+  y la ruta del node de la instalación.
+
+### Versión
+
+- `0.2.3` → **`0.2.4`** (package.json, `.iss`, `/health`).
+
 ## [0.2.3] — 2026-10-01 — Discovery (puerto/IP + mDNS) y activación de licencia
 
 ### Corregido

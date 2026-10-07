@@ -6,7 +6,12 @@ setlocal
 set "APP_DIR=%~dp0.."
 set "LOG_DIR=%ProgramData%\POS Server\logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-set "LOG_FILE=%LOG_DIR%\server-%date:~6,4%%date:~3,2%%date:~0,2%.log"
+REM Fecha robusta e independiente del formato local (%date% varia por region y
+REM rompia el nombre del log -> "path not found").
+set "TODAY="
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set "TODAY=%%i"
+if not defined TODAY set "TODAY=00000000"
+set "LOG_FILE=%LOG_DIR%\server-%TODAY%.log"
 set "DATA_DIR=%ProgramData%\POS Server\data"
 if not exist "%DATA_DIR%" mkdir "%DATA_DIR%"
 cd /d "%APP_DIR%"
