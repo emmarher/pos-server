@@ -30,6 +30,9 @@ import Fastify, {
 } from 'fastify'
 import jwt from '@fastify/jwt'
 import cors from '@fastify/cors'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { env } from './config/env.js'
 import { checkDatabase } from './database/client.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
@@ -52,6 +55,26 @@ import {
   type ApiDataSchema,
 } from './types/response.js'
 import type { ErrorCode } from './types/index.js'
+
+/* ── VERSIÓN DEL SERVIDOR ─────────────────────────────────────────────── */
+
+/**
+ * Lee la versión desde `package.json` para que no vuelva a quedar desactualizada
+ * (antes estaba hardcodeada y quedó en 0.2.6 tras dos releases).
+ * Funciona igual en dev (`src/app.ts`) y en producción (`dist/app.js`).
+ */
+function readServerVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const raw = readFileSync(resolve(here, '..', 'package.json'), 'utf8');
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === 'string' ? parsed.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+const SERVER_VERSION = readServerVersion();
 
 /* ── 1) SCHEMA DEL PAYLOAD DE /health ────────────────────────────────── */
 
@@ -98,7 +121,7 @@ function healthRoute(app: FastifyInstance): void {
         status: db ? ('ok' as const) : ('degraded' as const),
         service: 'pos-server',
         db: db ? ('up' as const) : ('down' as const),
-        version: '0.2.6',
+        version: SERVER_VERSION,
         timestamp: new Date().toISOString(),
       }
       return reply

@@ -34,12 +34,25 @@ El backend es un repositorio independiente (`pos-server/`).
   `tools/keys/` / `tools-posky/keys/`.
 - El instalador de Windows genera `TRIAL_ENABLED=false` en el `.env` (antes dependía solo de
   que `tools-posky/` no se empaquetara).
+- **`/health` reportaba una versión hardcodeada** (`0.2.6`) que quedó desactualizada tras
+  dos releases. Ahora la lee de `package.json`, así que no vuelve a pasar.
 
 ### Tests
 
 - 41 tests en verde (antes 33). Nuevos: modo desarrollo (4), `POST /license/trial` bloqueado
   (1), `keyToolDirs` sin la carpeta de datos (1) y redacción de `GET /license/status` (2).
   Los tests de comportamiento estricto desactivan explícitamente `LICENSE_DEV_MODE`.
+
+### Entorno de desarrollo
+
+- El entorno local dejó de depender de la **licencia trial de 1 día**: se borró
+  `~/.pos/license.lic` y el tenant `DEMO-0001` quedó con 365 días de vigencia. Sin `.lic` en
+  disco el server arranca en **modo degradado** (usa los campos de la BD) y no se bloquea.
+  La trial queda para probar el flujo de **activación** (wizard de primer arranque), no para
+  el día a día.
+- `npm run seed` sigue siendo **idempotente**: si el tenant ya existe no toca
+  `license_expires_at` (para reponerlo hay que usar `posky issue` o el modo desarrollo).
+- Versión del paquete: `0.2.6` → `0.2.8`.
 
 ## [0.2.7] — 2026-10-19 — Build de licencias: la clave pública se encuentra siempre
 

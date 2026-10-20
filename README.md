@@ -145,6 +145,24 @@ cliente: solo en `TRIAL_PRIVATE_KEY_PATH`, en la carpeta de la clave pública y 
 > `features` (solo devuelve `status` y `expires_at`); con token autenticado o en modo
 > desarrollo devuelve el detalle completo.
 
+### La licencia en desarrollo: no hace falta emitir ninguna
+
+El entorno local **no necesita** un `.lic`. Sin archivo de licencia en disco el server
+arranca en **modo degradado** y usa los campos de la BD (`license_state` /
+`license_expires_at`), que la semilla deja en 365 días:
+
+```
+~/.pos/            ← vacío: sin license.lic
+data/pos.sqlite    ← license_state vigente → el server reactiva el tenant solo
+```
+
+La licencia **trial de 1 día** es para probar el flujo de *activación* (wizard de primer
+arranque en `pos-desktop`), no para el día a día. Si la emite, al vencer vuelve a dejar el
+tenant bloqueado (hay que borrarla: `rm ~/.pos/license.lic`).
+
+> `npm run seed` es **idempotente**: si el tenant ya existe no toca `license_expires_at`.
+> Para reponer la vigencia: `posky issue` (toolkit) o `LICENSE_DEV_MODE`.
+
 ---
 
 ## Comandos
