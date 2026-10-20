@@ -17,8 +17,10 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { authenticate, requirePermission } from '../../middleware/auth.js'
 import { okEnvelope, okEnvelopeSchema } from '../../types/response.js'
 import type { AuthJwtPayload } from '../../types/auth.js'
+import type { LicenseInfo } from '../../types/license.js'
 import { licenseInfoSchema, uploadLicenseBodySchema } from './license.schema.js'
 import { uploadLicense, getLicenseStatus, recordHeartbeat, isBootstrapNeeded, issueTrialLicense } from './license.service.js'
+import { env } from '../../config/env.js'
 import { HttpError } from '../../types/errors.js'
 import { db } from '../../database/client.js'
 
@@ -46,6 +48,11 @@ async function resolveBootstrapTenantId(): Promise<string> {
   const any = await db.query<{ id: string }>('SELECT id FROM tenants LIMIT 1')
   if (any.rows[0]?.id) return any.rows[0].id
   throw new HttpError('NOT_FOUND', 'No hay tenant configurado para boot')
+}
+
+/** Quita los datos del cliente de la respuesta pública de licencia. */
+function redactLicenseInfo(info: LicenseInfo): LicenseInfo {
+  return { ...info, lic_id: null, customer: null, features: [] }
 }
 
 /** Plugin Fastify que registra las rutas de licencia. */
@@ -97,6 +104,17 @@ export function licenseRoutes(app: FastifyInstance): void {
       },
     },
     async (request) => {
+      // D1: el trial (1 día) NO está disponible en producción.
+      // Doble barrera:
+      //   - `trialEnabled` = false si TRIAL_ENABLED=false (instalador Windows)
+      //     o si el server está en modo estricto (LICENSE_STRICT / NODE_ENV=production).
+      //   - Sin la clave trial privada en disco, el issuance falla igual.
+      if (!env.trialEnabled) {
+        throw new HttpError(
+          'FORBIDDEN',
+          'Las licencias trial no están disponibles en esta instalación.',
+        )
+      }
       const authed = await tryAuth(request)
       const tenantId = authed?.tenant_id ?? (await (async () => {
         const bootstrap = await isBootstrapNeeded()
@@ -139,7 +157,12 @@ export function licenseRoutes(app: FastifyInstance): void {
       if (!hasLicense) {
         throw new HttpError('NO_LICENSE', 'Sin licencia')
       }
-      return okEnvelope(status, 'Estado de licencia', 200)
+      /* En producción la respuesta PÚBLICA (sin token) no expone datos del
+         cliente: solo estado y vigencia. El detalle completo (lic_id,
+         customer, features) queda para las peticiones autenticadas y para
+         el modo desarrollo. */
+      const data = !authed && !env.licenseDevMode ? redactLicenseInfo(status) : status
+      return okEnvelope(data, 'Estado de licencia', 200)
     },
   )
 

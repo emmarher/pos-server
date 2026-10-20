@@ -18,6 +18,7 @@
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../database/client.js'
+import { env } from '../config/env.js'
 import type { AuthJwtPayload } from '../types/auth.js'
 import { HttpError } from '../types/errors.js'
 
@@ -51,6 +52,16 @@ export const authenticate: PreHandler = async (request) => {
     new Date(tenant.license_expires_at).getTime() <= now.getTime()
 
   if (expired) {
+    // MODO DEV (LICENSE_DEV_MODE): la expiración de la licencia NO bloquea.
+    // Lo activa `npm run dev` / `npm test`; en producción nunca se ejecuta.
+    if (env.licenseDevMode) {
+      request.log.warn(
+        { tenant_id: payload.tenant_id, expires_at: tenant?.license_expires_at },
+        '[dev] Licencia vencida pero LICENSE_DEV_MODE activo — acceso permitido (modo desarrollo)',
+      )
+      request.user = payload
+      return
+    }
     throw new HttpError(
       'LICENSE_EXPIRED',
       'Licencia vencida. Contacte a soporte.',

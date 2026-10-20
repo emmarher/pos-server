@@ -13,6 +13,18 @@ process.env.SQLITE_PATH = './data/pos-test.sqlite'
 process.env.JWT_SECRET = 'test-secret-solo-para-vitest-0123456789abcdef'
 process.env.LOG_LEVEL = 'warn'
 
+/* Modo desarrollo: la licencia NUNCA bloquea al tenant durante los tests.
+   Lo inyecta también el script `npm test` (cross-env); aquí está para que
+   `npx vitest` directo tenga la misma semántica.
+   Los tests que verifique el comportamiento ESTRICTO lo desactivan
+   explícitamente con Object.defineProperty(env, 'licenseDevMode', ...). */
+process.env.LICENSE_DEV_MODE = 'true'
+
+/* Ruta del .lic SOLO de tests. Sin esto, POST /license/upload persiste en
+   ~/.pos/license.lic (la ruta real de producción) y deja el server de dev
+   con una licencia de prueba expirada → "ventas bloqueadas". */
+process.env.LICENSE_FILE_PATH = './data/test-license.lic'
+
 /* Imágenes habilitadas; el storage S3 se MOCKEA en los tests (no se
    requiere Garage corriendo). Las credenciales son placeholder. */
 process.env.IMAGES_ENABLED = 'true'

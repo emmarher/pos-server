@@ -4,6 +4,107 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.8] — 2026-10-20 — Modo desarrollo, cierre del trial y redacción del estado
+
+### Añadido
+
+- **`LICENSE_DEV_MODE`**: en modo desarrollo la licencia **nunca bloquea al tenant**.
+  - Si el tenant quedó inactivo o vencido se **reactiva solo** con vigencia extendida
+    (`LICENSE_DEV_DAYS`, 365 días por defecto); el middleware de autenticación deja de
+    devolver 403 por expiración y el monitor que desactiva tenants vencidos no corre.
+  - La bandera **la inyecta el script de npm**, no el `.env`:
+    `npm run dev` y `npm test` → `cross-env LICENSE_DEV_MODE=true`.
+    El `.env` queda **siempre en modo producción** (`LICENSE_STRICT=true`) y `npm start`
+    arranca con comportamiento estricto. `NODE_ENV=production` anula la bandera.
+- **`TRIAL_ENABLED`** (default `true`, el instalador de Windows lo pone en `false`):
+  cuando está en `false` **o** el server está en modo estricto/producción,
+  `POST /license/trial` responde `403` y nadie puede auto-activar una licencia trial de
+  1 día sin un `.lic` firmado.
+- **Redacción de `GET /license/status`**: la ruta es pública. En producción, sin token,
+  ahora solo devuelve `status` y `expires_at` (se ocultan `lic_id`, `customer` y
+  `features`). Con token autenticado o en modo desarrollo mantiene el detalle completo.
+- `LICENSE_DEV_DAYS` (default `365`) y documentación de `TRIAL_PRIVATE_KEY_PATH` / `TRIAL_PASS`
+  en `.env.example` (ya se leían, pero no estaban documentadas).
+
+### Corregido
+
+- **La clave privada trial era localizable dentro de la instalación del cliente**:
+  `keyToolDirs()` buscaba en `dataDir()` y junto al `.lic` (`%ProgramData%\POS Server\data`).
+  Ahora solo se busca en `TRIAL_PRIVATE_KEY_PATH`, en la carpeta de la clave pública y en
+  `tools/keys/` / `tools-posky/keys/`.
+- El instalador de Windows genera `TRIAL_ENABLED=false` en el `.env` (antes dependía solo de
+  que `tools-posky/` no se empaquetara).
+
+### Tests
+
+- 41 tests en verde (antes 33). Nuevos: modo desarrollo (4), `POST /license/trial` bloqueado
+  (1), `keyToolDirs` sin la carpeta de datos (1) y redacción de `GET /license/status` (2).
+  Los tests de comportamiento estricto desactivan explícitamente `LICENSE_DEV_MODE`.
+
+## [0.2.7] — 2026-10-19 — Build de licencias: la clave pública se encuentra siempre
+
+### Corregido
+
+- **La renovación de licencia bloqueaba el negocio (login 403 + ventas bloqueadas)**: el sello
+  HMAC del contador anti-rollback (`license_anti_rollback.counter_hmac`) está atado al
+  `lic_id` de la licencia que lo emitió, pero **no se re-ligaba al cambiar la licencia**
+  (renovación o trial). Al arrancar con la licencia nueva, el chequeo leía
+  *"HMAC mismatch: counter=0, posible manipulación de BD"* → `rollbackDetected` sin gracia →
+  **tenant desactivado**, aunque la licencia fuera válida.
+  - El sello ahora **se re-liga al `lic_id` vigente conservando el contador** (la protección
+    real es el contador monotónico, no el sello). El re-ligado ocurre dentro de
+    `storeLicenseState()`, es decir, en el único punto donde el `lic_id` cambia: vale para
+    el arranque, `POST /license/upload` y `POST /license/trial`.
+  - Solo se re-liga si el `lic_id` **cambió de verdad**: con la misma licencia el sello no se
+    toca y una manipulación real del contador sigue detectándose.
+- **Un tenant desactivado quedaba bloqueado para siempre**: `getActiveTenant()` solo devuelve
+  tenants activos, así que tras una desactivación la validación del arranque se saltaba y el
+  tenant no podía volver a operar (ni con un `.lic` válido en disco). Ahora, si no hay tenant
+  activo pero hay un `.lic` con **firma válida**, se resuelve su tenant y se re-valida →
+  **el tenant se reactiva solo**.
+- **Reparación de sellos heredados de 0.2.6**: los tenants que quedaron con el sello atado a
+  una licencia anterior se recuperan solos. La prueba es criptográfica: si el sello valida
+  contra un `lic_id` **histórico del mismo tenant** (extraído de `license_audit`), es
+  auténtico —hace falta el secreto para calcularlo— y se re-liga al `lic_id` vigente
+  (queda registrado en la auditoría). Si no valida contra ninguno, se sigue tratando como
+  manipulación de BD y el tenant se bloquea.
+- **El build fallaba con "No se encontró la clave pública de licencias"**: el generador
+  (`scripts/generatePublicKey.js`) solo buscaba en `tools/keys/`, pero el toolkit de licencias
+  vive en el repo hermano `tools-posky/`. Ahora la clave se busca en orden:
+  `PUBLIC_KEY_PATH` (env o `.env`) → `pos-server/keys/` → `tools/keys/` → `tools-posky/keys/`.
+  Además el generador **ya lee el `.env`** (antes `PUBLIC_KEY_PATH` en `.env` se ignoraba,
+  pese a que el mensaje de error lo sugería como solución).
+- **La variable `PUBLIC_KEY_PATH` apuntando a un archivo inexistente ya no cae en silencio**
+  a las rutas por defecto: se reporta como error explícito.
+- **`POST /license/trial` no encontraba la clave privada trial** (mismo desfase
+  `tools/` vs `tools-posky/`): ahora se busca en la carpeta de la clave pública embebida,
+  `tools/keys/`, `tools-posky/keys/` y la carpeta de datos.
+- **Los tests contaminaban el entorno real**:
+  - `npm test` dejaba la **clave de PRUEBA embebida** en `src/keys/publicKey.ts`
+    (un `npm start` posterior arrancaba con una clave que rechaza todas las licencias
+    reales). Ahora se guarda la clave de producción y se **restaura en el teardown**.
+  - `POST /license/upload` (tests) escribía el `.lic` en **`~/.pos/license.lic`** (la ruta
+    real de producción) y el server de dev adoptaba ese `license_key`, dejando el tenant
+    desactivado y el login bloqueado (403). Ahora los tests usan
+    `data/test-license.lic` y borran el archivo al terminar.
+  - El marker de "clave de prueba" en `LICENSE_STRICT` estaba **hardcodeado a una clave
+    vieja** → la advertencia nunca saltaba. Se sustituyó por el flag `IS_TEST_KEY`
+    que emite el propio generador.
+- **`bonjour-service` faltaba en `node_modules`** (dependencia declarada pero no
+  instalada) → `tsc` fallaba con `TS2307` y el build no completaba.
+
+### Tests
+
+- `tests/license.test.ts`: 3 pruebas nuevas de regresión — (1) renovar la licencia y
+  arrancar dos veces más **no bloquea el tenant** (falla con `grace_clock` sin el fix),
+  (2) un tenant desactivado **se reactiva** con un `.lic` válido en disco,
+  (3) un sello atado a una licencia anterior **se re-liga** al vigente.
+
+### Nota
+
+- `npm run build:keys` requiere **Node 20.19+ / 22.12+** (`engines`): con Node 18 el
+  módulo nativo `better-sqlite3` falla con `NODE_MODULE_VERSION`.
+
 ## [0.2.6] — 2026-10-07 — La licencia manda: el server adopta el código del tenant
 
 ### Cambiado

@@ -89,6 +89,22 @@ export interface AppEnv {
   publicKeyPath: string
   /** Si true, la falta de .lic bloquea (prod). Si false, modo degradado (dev). */
   licenseStrict: boolean
+  /**
+   * Modo desarrollo: la licencia NUNCA bloquea al tenant.
+   *
+   * Lo activa el script de npm (`npm run dev` / `npm test`), NUNCA el `.env`:
+   * así el `.env` queda en modo producción por defecto y no se filtra el flag.
+   * Se anula si NODE_ENV=production (barrera dura).
+   */
+  licenseDevMode: boolean
+  /** Días de vigencia de la licencia cuando el modo dev la extiende (default 365). */
+  licenseDevDays: number
+  /**
+   * Habilita POST /license/trial (trial 1 día).
+   * Default: habilitado solo si NO es modo estricto (prod → deshabilitado).
+   * `TRIAL_ENABLED=false` lo desactiva explícitamente (instalador de Windows).
+   */
+  trialEnabled: boolean
   /** Secreto para HMAC anti-rollback (si no se fija, deriva de JWT_SECRET). */
   licenseHmacSecret: string
   /** Ruta al PEM privado trial (para POST /license/trial — 1 día, familia aislada). */
@@ -118,6 +134,30 @@ function loadEnv(): AppEnv {
   // por error de tipeo y pensar que es postgres).
   const dbProvider = normalizeDbProvider(process.env.DB_PROVIDER)
 
+  /* ── Banderas de licencia ──────────────────────────────────────────────
+     El flag de desarrollo NUNCA se lee del .env: lo inyecta el script de
+     npm (`cross-env LICENSE_DEV_MODE=true ...`). Así el `.env` de un equipo
+     queda en modo producción por defecto y no expone el flag. */
+  const licenseDevMode =
+    process.env.LICENSE_DEV_MODE?.trim().toLowerCase() === 'true' &&
+    process.env.NODE_ENV !== 'production'
+
+  /* Modo estricto = la licencia bloquea. El modo dev lo desactiva siempre
+     (salvo NODE_ENV=production, que es una barrera dura). */
+  const licenseStrict =
+    !licenseDevMode &&
+    ((process.env.LICENSE_STRICT?.trim().toLowerCase() === 'true') ||
+      process.env.NODE_ENV === 'production')
+
+  const licenseDevDays = normalizeDevDays(process.env.LICENSE_DEV_DAYS)
+
+  /* El trial se habilita por defecto SOLO fuera del modo estricto. En
+     producción queda cerrado aunque nadie lo configure (doble barrera con
+     TRIAL_ENABLED=false que fija el instalador de Windows). */
+  const trialEnabled =
+    (process.env.TRIAL_ENABLED?.trim().toLowerCase() ?? 'true') !== 'false' &&
+    !licenseStrict
+
   return {
     port: Number(process.env.PORT ?? 3000),
     host: process.env.HOST ?? '0.0.0.0',
@@ -146,9 +186,10 @@ function loadEnv(): AppEnv {
     licenseFilePath:
       process.env.LICENSE_FILE_PATH?.trim() || defaultLicenseFilePath(),
     publicKeyPath: process.env.PUBLIC_KEY_PATH?.trim() || '../tools/keys/mipos_public.pem',
-    licenseStrict:
-      (process.env.LICENSE_STRICT?.trim().toLowerCase() === 'true') ||
-      process.env.NODE_ENV === 'production',
+    licenseStrict,
+    licenseDevMode,
+    licenseDevDays,
+    trialEnabled,
     licenseHmacSecret:
       process.env.LICENSE_HMAC_SECRET?.trim() || process.env.JWT_SECRET?.trim() || jwtSecret,
     trialPrivateKeyPath:
@@ -223,6 +264,13 @@ function normalizeDbProvider(raw: string | undefined): DbProvider {
   throw new Error(
     `DB_PROVIDER inválido: "${raw}". Usa "sqlite" (dev) o "postgres" (prod).`,
   )
+}
+
+/** Días de gracia de licencia en modo dev (default 365, mínimo 1). */
+function normalizeDevDays(raw: string | undefined): number {
+  const n = Number(raw ?? 365)
+  if (!Number.isFinite(n) || n < 1) return 365
+  return Math.floor(n)
 }
 
 function normalizePoolReadSize(raw: string | undefined): number {

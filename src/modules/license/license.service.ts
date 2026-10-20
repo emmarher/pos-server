@@ -30,14 +30,14 @@
  */
 import { verify, createHmac, createHash, createPublicKey, sign, createPrivateKey } from 'node:crypto'
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import type { FastifyInstance } from 'fastify'
 import { env } from '../../config/env.js'
 import { db, type DbClient } from '../../database/client.js'
 import { HttpError } from '../../types/errors.js'
-import { PUBLIC_KEY_PEM } from '../../keys/publicKey.js'
+import { PUBLIC_KEY_PEM, IS_TEST_KEY } from '../../keys/publicKey.js'
 import { TRIAL_PUBLIC_KEY_PEM } from '../../keys/trialPublicKey.js'
 import type {
   LicensePayload,
@@ -212,12 +212,36 @@ async function getActiveTenant(): Promise<ActiveTenantRow | null> {
   return rows[0] ?? null
 }
 
+/**
+ * Resuelve el tenant INACTIVO al que pertenece un .lic con firma válida.
+ *
+ * Por qué: si un arranque previo desactivó el tenant (licencia vencida o
+ * gracia expirada), `getActiveTenant()` ya no lo devuelve y la validación
+ * del arranque se salta → el tenant queda bloqueado para siempre (login 403)
+ * aunque haya un .lic válido en disco. Con este fallback la licencia firmada
+ * vuelve a mandar: si su firma es válida, el tenant se reactiva.
+ */
+async function findTenantByLicenseKey(licenseKey: string): Promise<ActiveTenantRow | null> {
+  const { rows } = await db.query<ActiveTenantRow>(
+    `SELECT id, license_key, name, is_active, license_expires_at, max_devices
+     FROM tenants
+     WHERE license_key = $1
+     LIMIT 1`,
+    [licenseKey],
+  )
+  return rows[0] ?? null
+}
+
 /* ── 4) Aplicar licencia al tenant ────────────────────────────────── */
 
 /**
  * Actualiza los campos de `tenants` desde el payload verificado.
  * La licencia firmada es la fuente de verdad: license_expires_at, max_devices
  * e is_active se sincronizan desde el .lic al arranque y al subir uno nuevo.
+ *
+ * MODO DEV (LICENSE_DEV_MODE): la licencia NUNCA bloquea al tenant. Si el
+ * payload está vencido (o es inválido) se extiende la vigencia y el tenant
+ * queda operativo. En producción esta rama nunca se ejecuta.
  */
 async function applyLicenseToTenant(
   tx: DbClient,
@@ -226,6 +250,17 @@ async function applyLicenseToTenant(
   isActive: boolean,
 ): Promise<void> {
   const nowIso = new Date().toISOString()
+  let expires = payload.expires
+  let active = isActive
+
+  if (env.licenseDevMode) {
+    active = true
+    const expMs = new Date(expires).getTime()
+    if (!expires || !Number.isFinite(expMs) || expMs <= Date.now()) {
+      expires = devLicenseExpiry()
+    }
+  }
+
   await tx.query(
     `UPDATE tenants
      SET license_expires_at = $1,
@@ -233,8 +268,16 @@ async function applyLicenseToTenant(
          is_active = $3,
          updated_at = $4
      WHERE id = $5`,
-    [payload.expires, payload.seats, isActive ? 1 : 0, nowIso, tenantId],
+    [expires, payload.seats, active ? 1 : 0, nowIso, tenantId],
   )
+}
+
+/**
+ * Vigencia de la licencia cuando el modo dev tiene que extenderla.
+ * `now + LICENSE_DEV_DAYS` (default 365 días).
+ */
+function devLicenseExpiry(): string {
+  return new Date(Date.now() + env.licenseDevDays * 24 * 60 * 60 * 1000).toISOString()
 }
 
 /* ── 5) Almacenar estado de licencia ──────────────────────────────── */
@@ -254,6 +297,23 @@ async function storeLicenseState(
   const nowIso = new Date().toISOString()
   // La firma ya fue verificada por el caller (validateLicenseAtStartup / uploadLicense).
   // No se re-verifica aqui para evitar doble costo y errores genericos.
+
+  // Si la licencia RENUEVA (cambia el lic_id), el sello HMAC del contador
+  // anti-rollback debe re-ligarse a la nueva lic_id (el CONTADOR no se
+  // reinicia). Se hace ANTES del upsert para poder comparar con el lic_id
+  // vigente. Si no se re-liga, el arranque siguiente lee
+  // "HMAC mismatch: posible manipulación de BD" y DESACTIVA el tenant
+  // (login 403 + ventas bloqueadas) pese a tener una licencia válida.
+  const { rows: prevStateRows } = await tx.query<{ lic_id: string }>(
+    'SELECT lic_id FROM license_state WHERE tenant_id = $1',
+    [tenantId],
+  )
+  await rebindAntiRollbackIfLicenseChanged(
+    tx,
+    tenantId,
+    prevStateRows[0]?.lic_id,
+    payload.lic_id,
+  )
 
   await tx.query(
     `INSERT INTO license_state (
@@ -303,6 +363,11 @@ async function storeLicenseState(
 /**
  * Inicializa la fila de license_anti_rollback si no existe.
  * counter=0, HMAC=HMAC(0, jwtSecret+lic_id), last_sale_at=NOW().
+ *
+ * NO re-liga el sello de una fila existente a propósito: el sello atado a otra
+ * lic_id es la señal de que la licencia cambió (renovación) y se resuelve
+ * con rebindAntiRollbackIfLicenseChanged(). Así una manipulación real del
+ * contador (misma licencia) sigue detectándose.
  */
 async function initAntiRollback(
   tx: DbClient,
@@ -320,6 +385,40 @@ async function initAntiRollback(
 }
 
 /**
+ * Re-liga el sello HMAC del contador anti-rollback cuando el tenant RENUEVA la
+ * licencia (nuevo `lic_id`). El CONTADOR NO se reinicia: la protección real
+ * es el contador monotónico; el sello solo ata el contador a la licencia que
+ * lo emitió (deriva de `LICENSE_HMAC_SECRET + lic_id`).
+ *
+ * Sin esto, al cargar la licencia nueva el sello seguía atado a la lic_id
+ * anterior → "HMAC mismatch: posible manipulación de BD" en el arranque
+ * siguiente → tenant desactivado (login 403 + ventas bloqueadas).
+ *
+ * Solo se re-liga si el `lic_id` de `license_state` CAMBIÓ realmente: con la
+ * misma licencia el sello no se toca y una manipulación del contador sigue
+ * detectándose.
+ */
+async function rebindAntiRollbackIfLicenseChanged(
+  client: DbClient,
+  tenantId: string,
+  prevLicId: string | null | undefined,
+  newLicId: string,
+): Promise<void> {
+  if (!prevLicId || prevLicId === newLicId) return
+  const { rows } = await client.query<{ counter: number }>(
+    `SELECT counter FROM license_anti_rollback WHERE tenant_id = $1`,
+    [tenantId],
+  )
+  const row = rows[0]
+  if (!row) return
+  const hmac = computeCounterHmac(row.counter, newLicId)
+  await client.query(
+    `UPDATE license_anti_rollback SET counter_hmac = $1, updated_at = $2 WHERE tenant_id = $3`,
+    [hmac, new Date().toISOString(), tenantId],
+  )
+}
+
+/**
  * HMAC-SHA256 del contador. La clave deriva de licenseHmacSecret + lic_id
  * (si no se fija LICENSE_HMAC_SECRET, cae a JWT_SECRET por compatibilidad).
  */
@@ -327,6 +426,33 @@ function computeCounterHmac(counter: number, licId: string): string {
   return createHmac('sha256', env.licenseHmacSecret + licId)
     .update(counter.toString())
     .digest('hex')
+}
+
+/**
+ * Extrae los `lic_id` mencionados en los últimos mensajes de auditoría del
+ * tenant. Sirve para PROBAR que un sello anti-rollback pertenece a una
+ * licencia ANTERIOR del mismo tenant (renovación) y no a una manipulación de
+ * BD: si el sello valida contra un lic_id histórico, es auténtico (hace falta
+ * el secreto para calcularlo).
+ */
+async function findHistoricalLicIds(
+  tenantId: string,
+  client: DbClient = db,
+  limit = 100,
+): Promise<string[]> {
+  const { rows } = await client.query<{ message: string | null }>(
+    `SELECT message FROM license_audit
+     WHERE tenant_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [tenantId, limit],
+  )
+  const ids = new Set<string>()
+  for (const r of rows) {
+    const matches = (r.message ?? '').match(/\b(?:LIC|TRIAL)-[A-Za-z0-9._-]+/g)
+    if (matches) for (const m of matches) ids.add(m)
+  }
+  return [...ids]
 }
 
 /**
@@ -362,14 +488,40 @@ export async function checkAntiRollback(
   // a) Verificar HMAC (detiene manipulación de BD)
   const expectedHmac = computeCounterHmac(row.counter, licId)
   if (expectedHmac !== row.counter_hmac) {
-    await logLicenseAudit(
-      tenantId,
-      'CLOCK_ROLLBACK',
-      `HMAC mismatch: counter=${row.counter}, posible manipulación de BD`,
-      'ERROR',
-      client,
+    /* El sello no corresponde al lic_id vigente. Antes de acusar "manipulación
+       de BD" se comprueba si corresponde a una licencia ANTERIOR del mismo
+       tenant (renovación mal re-ligada por versiones previas a 0.2.7). Si el
+       sello valida contra un lic_id histórico es AUTÉNTICO (hace falta el
+       secreto para calcularlo) → se re-sella con el lic_id vigente y el
+       contador se conserva. Si no valida contra ninguno → manipulación real. */
+    const historical = await findHistoricalLicIds(tenantId, client)
+    const legacyLicId = historical.find(
+      (id) => id !== licId && computeCounterHmac(row.counter, id) === row.counter_hmac,
     )
-    return { rollbackDetected: true, inGracePeriod: false, graceExpiresAt: null }
+    if (legacyLicId) {
+      await client.query(
+        `UPDATE license_anti_rollback
+         SET counter_hmac = $1, updated_at = $2
+         WHERE tenant_id = $3`,
+        [expectedHmac, new Date().toISOString(), tenantId],
+      )
+      await logLicenseAudit(
+        tenantId,
+        'VALIDATED',
+        `Sello anti-rollback re-ligado de ${legacyLicId} a ${licId} (renovación) — contador conservado`,
+        'WARN',
+        client,
+      )
+    } else {
+      await logLicenseAudit(
+        tenantId,
+        'CLOCK_ROLLBACK',
+        `HMAC mismatch: counter=${row.counter}, posible manipulación de BD`,
+        'ERROR',
+        client,
+      )
+      return { rollbackDetected: true, inGracePeriod: false, graceExpiresAt: null }
+    }
   }
 
   // b) Verificar retroceso de reloj (last_sale_at en el futuro)
@@ -584,27 +736,53 @@ export async function isBootstrapNeeded(): Promise<boolean> {
   return true
 }
 
-/** Resuelve la ruta al PEM privado trial (soporta ruta relativa a pos-server o absoluta). */
+/**
+ * Carpetas donde puede estar el toolkit de claves (privada trial).
+ * Cubre el layout del workspace: la clave pública y la privada trial viven
+ * en el MISMO repo de herramientas (tools/keys o tools-posky/keys).
+ *
+ * SEGURIDAD: la carpeta de datos del servidor y la carpeta del archivo .lic
+ * quedan EXCLUIDAS a propósito. La clave trial privada (`trial_private.pem`)
+ * no está cifrada, así que no debe ser localizable dentro de
+ * %ProgramData%\POS Server\data del cliente final.
+ *
+ * Exportada para poder verificar en los tests que la carpeta de datos y la
+ * carpeta del .lic NUNCA son candidatas.
+ */
+export function keyToolDirs(): string[] {
+  const dirs: string[] = []
+  const push = (p: string | undefined | null) => {
+    if (p && !dirs.includes(p)) dirs.push(p)
+  }
+  // 1) Carpeta de la clave pública embebida (mismo repo de herramientas).
+  const pubPath = env.publicKeyPath?.trim()
+  if (pubPath) push(dirname(isAbsolute(pubPath) ? pubPath : resolve(process.cwd(), pubPath)))
+  // 2) Layout canónico del workspace.
+  push(resolve(process.cwd(), '../tools/keys'))
+  push(resolve(process.cwd(), '../tools-posky/keys'))
+  return dirs
+}
+
+/**
+ * Resuelve la ruta al PEM privado trial.
+ * Solo se consideran rutas relativas a la RAÍZ de pos-server o absolutas:
+ * nunca la carpeta del .lic ni la carpeta de datos del cliente.
+ */
 function resolveTrialPrivatePath(): string {
   const p = env.trialPrivateKeyPath?.trim()
-  if (!p) return resolve(dirname(env.licenseFilePath), '../tools/keys/trial_private.pem')
-  if (p.startsWith('/')) return p
-  // relativo a pos-server root (../../tools/keys/...)
-  // Si el proceso corre desde pos-server, resolver relativo a cwd; si es relativo tipo ../tools, va bien.
-  try {
-    const tryResolve = resolve(process.cwd(), p)
-    if (existsSync(tryResolve)) return tryResolve
-  } catch {}
-  return resolve(join(dirname(env.licenseFilePath), p))
+  if (!p) return resolve(process.cwd(), '../tools-posky/keys/trial_private.pem')
+  if (isAbsolute(p)) return p
+  // Relativo a la raíz de pos-server (p. ej. ../tools-posky/keys/trial_private.pem)
+  return resolve(process.cwd(), p)
 }
 
 function loadTrialPrivateKey() {
-  const candidates = [
-    resolveTrialPrivatePath(),
-    resolve(process.cwd(), '../tools/keys/trial_private.pem'),
-    resolve(process.cwd(), '../tools/keys/trial_private.enc.pem'),
-    join(dataDir(), 'trial_private.pem'),
-  ]
+  const candidates = new Set<string>()
+  candidates.add(resolveTrialPrivatePath())
+  for (const dir of keyToolDirs()) {
+    candidates.add(join(dir, 'trial_private.pem'))
+    candidates.add(join(dir, 'trial_private.enc.pem'))
+  }
   const tried: string[] = []
   for (const p of candidates) {
     tried.push(p)
@@ -623,7 +801,7 @@ function loadTrialPrivateKey() {
   }
   throw new HttpError(
     'FORBIDDEN',
-    `No se pudo cargar la clave trial privada (probado: ${tried.join(', ')}). Configure TRIAL_PRIVATE_KEY_PATH/TRIAL_PASS o genere con tools/generate-trial-keys.js`,
+    `No se pudo cargar la clave trial privada (probado: ${tried.join(', ')}). Configure TRIAL_PRIVATE_KEY_PATH/TRIAL_PASS o genere con tools-posky/generate-trial-keys.js`,
   )
 }
 
@@ -702,27 +880,111 @@ export async function issueTrialLicense(tenantId?: string): Promise<LicenseInfo>
  * Si es inválida/expirada, desactiva el tenant (is_active=0).
  * Si falta el archivo, entra en modo degradado (usa los campos BD existentes).
  *
+ * MODO DEV (LICENSE_DEV_MODE, lo activa `npm run dev` / `npm test`):
+ * la licencia NUNCA bloquea al tenant — si quedara bloqueado se reactiva con
+ * vigencia extendida. En producción esta rama no se ejecuta.
+ *
  * @returns LicenseStatus para logging en server.ts
  */
 export async function validateLicenseAtStartup(app: FastifyInstance): Promise<LicenseStatus> {
-  // Check prod con clave de prueba (P8): si LICENSE_STRICT y clave es la de test, advertir
-  const TEST_KEY_MARKER = 'MCowBQYDK2VwAyEAo5PST3nj9u/vt8iNHyoyDAGUaZZvgUNOxDeNcCzjq9w='
-  if (env.licenseStrict && PUBLIC_KEY_PEM.includes(TEST_KEY_MARKER)) {
+  const status = await validateLicenseCore(app)
+
+  if (!env.licenseDevMode) return status
+
+  // MODO DEV: la licencia NUNCA deja el server bloqueado. Si el tenant quedó
+  // inactivo o vencido se reactiva con vigencia extendida y el server opera
+  // como si la licencia fuera válida. En producción esta rama no se ejecuta.
+  await ensureDevTenantUsable(app, status)
+
+  // 'missing' (sin .lic → modo degradado) no es un bloqueo: se mantiene el
+  // estado para que el log siga mostrando la realidad del archivo.
+  if (status === 'missing') return 'missing'
+  return 'active'
+}
+
+/**
+ * MODO DEV: garantiza que el tenant quede utilizable.
+ * Solo actúa si el tenant está realmente bloqueado (inactivo o vencido).
+ */
+async function ensureDevTenantUsable(
+  app: FastifyInstance,
+  status: LicenseStatus,
+): Promise<void> {
+  const tenant = await resolveAnyTenant()
+  if (!tenant) return
+  const expMs = new Date(tenant.license_expires_at).getTime()
+  const blocked = tenant.is_active !== 1 || !Number.isFinite(expMs) || expMs <= Date.now()
+  if (!blocked) return
+
+  const expires = devLicenseExpiry()
+  await db.query(
+    'UPDATE tenants SET is_active = 1, license_expires_at = $1, updated_at = $2 WHERE id = $3',
+    [expires, new Date().toISOString(), tenant.id],
+  )
+  app.log.warn(
+    `[dev] Modo desarrollo (LICENSE_DEV_MODE): tenant ${tenant.license_key} reactivado ` +
+      `hasta ${expires} (estado de licencia: ${status})`,
+  )
+}
+
+/** Resuelve cualquier tenant (activo primero, si no el más antiguo). */
+async function resolveAnyTenant(): Promise<ActiveTenantRow | null> {
+  const active = await getActiveTenant()
+  if (active) return active
+  const { rows } = await db.query<ActiveTenantRow>(
+    `SELECT id, license_key, name, is_active, license_expires_at, max_devices
+     FROM tenants
+     ORDER BY created_at ASC
+     LIMIT 1`,
+  )
+  return rows[0] ?? null
+}
+
+async function validateLicenseCore(app: FastifyInstance): Promise<LicenseStatus> {
+  // Check prod con clave de prueba (P8): si LICENSE_STRICT y la clave embebida
+  // es la de test (la generan los tests), advertir loudly.
+  if (env.licenseStrict && IS_TEST_KEY) {
     app.log.error('Clave publica de PRUEBA en modo estricto — reemplace con la clave de produccion (tools/keys/mipos_public.pem) y ejecute npm run build:keys')
   }
   if (!PUBLIC_KEY_PEM) {
     app.log.warn('Sin PUBLIC_KEY_PEM embebida — verificacion Ed25519 deshabilitada (modo degradado)')
   }
-  const tenant = await getActiveTenant()
+  let tenant = await getActiveTenant()
+  const licContent = loadLicenseFile()
+  let preverified: LicensePayload | null = null
+
   if (!tenant) {
-    app.log.warn('No hay tenant activo — sin licencia que validar')
-    return 'missing'
+    /* No hay tenant activo. Puede ser una instalación fresh O un tenant que un
+       arranque previo desactivó (licencia vencida o gracia expirada). Si hay un
+       .lic en disco con firma válida, este manda: se resuelve su tenant y se
+       re-valida (así el tenant se reactiva solo en vez de quedar bloqueado). */
+    if (licContent) {
+      const verification = verifyLicenseSignature(licContent)
+      if (verification.valid && verification.payload) {
+        const candidate = await findTenantByLicenseKey(verification.payload.license_key)
+        if (candidate) {
+          app.log.warn(
+            `Tenant ${candidate.license_key} inactivo — re-validando su licencia en disco`,
+          )
+          tenant = candidate
+          preverified = verification.payload
+        }
+      } else {
+        app.log.error(
+          `Licencia inválida (firma) en ${env.licenseFilePath} y sin tenant activo — servidor bloqueado`,
+        )
+        return 'invalid'
+      }
+    }
+    if (!tenant) {
+      app.log.warn('No hay tenant activo — sin licencia que validar')
+      return 'missing'
+    }
   }
 
   const { id: tenantId, license_key: tenantLicenseKey } = tenant
 
   // Step 1: ¿Existe el archivo .lic?
-  const licContent = loadLicenseFile()
   if (!licContent) {
     // Respetar una licencia ya aplicada en BD (p. ej. subida por el wizard en
     // una versión previa): si license_state es válida y vigente, NO desactivar
@@ -773,7 +1035,10 @@ export async function validateLicenseAtStartup(app: FastifyInstance): Promise<Li
   }
 
   // Step 2-3: ¿Formato + firma válida con Ed25519?
-  const verification = verifyLicenseSignature(licContent)
+  // (Si el tenant estaba inactivo y se resolvió por el .lic, ya está verificado.)
+  const verification: LicenseVerification = preverified
+    ? { valid: true, payload: preverified, error: undefined }
+    : verifyLicenseSignature(licContent)
   if (!verification.valid || !verification.payload) {
     app.log.error(
       `Licencia inválida (firma) para tenant ${tenantLicenseKey}. ` +
@@ -981,8 +1246,31 @@ export function checkExpiryWarnings(expiresAt: string): 'none' | 'warning' | 'cr
 /**
  * Obtiene el estado de la licencia para el tenant (GET /license/status).
  * Lee license_state + tenants y calcula el warning level.
+ *
+ * MODO DEV (LICENSE_DEV_MODE): el estado se reporta 'active' aunque la
+ * licencia firmada esté vencida, porque el server está operando. La
+ * vigencia mostrada es la extendida del tenant.
  */
 export async function getLicenseStatus(tenantId: string): Promise<LicenseInfo> {
+  const info = await computeLicenseStatus(tenantId)
+  if (!env.licenseDevMode) return info
+
+  const { rows } = await db.query<{ license_expires_at: string | null }>(
+    'SELECT license_expires_at FROM tenants WHERE id = $1',
+    [tenantId],
+  )
+  const expires = rows[0]?.license_expires_at || info.expires_at
+  return {
+    ...info,
+    status: 'active',
+    expires_at: expires,
+    warning_level: expires ? checkExpiryWarnings(expires) : 'none',
+    grace_reason: null,
+    grace_expires_at: null,
+  }
+}
+
+async function computeLicenseStatus(tenantId: string): Promise<LicenseInfo> {
   const { rows } = await db.query<{
     lic_id: string
     customer: string | null

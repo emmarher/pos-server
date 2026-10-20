@@ -50,6 +50,100 @@ cp .env.example .env      # luego edita JWT_SECRET (obligatorio) y DB_PROVIDER
 | `JWT_REFRESH_EXPIRES_IN` | `2592000` | Vigencia del refresh token en segundos (30d) |
 | `DEVICE_LIMIT_DEFAULT` | `3` | Máximo de dispositivos por tenant (RF-AU-004) |
 | `LOG_LEVEL` | `info` | Nivel de log de Fastify/pino |
+| `PUBLIC_KEY_PATH` | — | Ruta (relativa a `pos-server/`) de la clave **pública** Ed25519 que se embebe en el build. Vacío = búsqueda automática (ver abajo) |
+| `TRIAL_PUBLIC_KEY_PATH` | — | Igual, para la familia de claves *trial* (licencias trial de 1 día) |
+| `LICENSE_FILE_PATH` | `~/.pos/license.lic` | Ruta del `.lic` firmado que el server verifica al arrancar |
+| `LICENSE_STRICT` | `false` | `true` = sin `.lic` válido el tenant queda bloqueado (login 403). En producción el instalador lo fija en `true` |
+| `TRIAL_ENABLED` | `true` | `false` = `POST /license/trial` responde 403. El instalador de Windows lo fija en `false` |
+| `TRIAL_PRIVATE_KEY_PATH` | — | Ruta de la clave privada **trial** (solo si el server emite trials). No lapongas junto al `.lic` del cliente |
+| `TRIAL_PASS` | — | Passphrase con la que se descifra `TRIAL_PRIVATE_KEY_PATH` (si el PEM está cifrado) |
+| `LICENSE_DEV_MODE` | — | **No la pongas en `.env`.** La inyecta `npm run dev` / `npm test` (ver *Modo desarrollo*) |
+| `LICENSE_DEV_DAYS` | `365` | Días de vigencia que se extiende la licencia en modo desarrollo |
+
+### Claves de licencias (Ed25519)
+
+El server **no recibe la clave pública por `.env` en runtime**: se embebe en el binario
+en el build (`npm run build:keys` → `src/keys/publicKey.ts`, gitignored) para que un
+cliente no pueda sustituirla por una propia y aceptar licencias falsificadas.
+
+El generador busca la clave **pública** en este orden:
+
+1. `PUBLIC_KEY_PATH` / `TRIAL_PUBLIC_KEY_PATH` (variable de entorno o entrada en `.env`)
+2. `pos-server/keys/`
+3. `tools/keys/` (ruta canónica del toolkit de licencias)
+4. `tools-posky/keys/` (repo hermano donde vive el toolkit en este workspace)
+
+Las claves las emite el repo hermano `tools-posky/` (herramienta de issuance):
+
+```bash
+node tools-posky/generate-keys.js          # par principal (pública + privada cifrada)
+node tools-posky/generate-trial-keys.js    # familia trial (1 día)
+node tools-posky/issue-license.js "Cliente" sucursal DEMO-0001 3   # emite un .lic
+```
+
+> Sin clave embebida el build falla (`npm run build:keys` sale con código 1). Con
+> `ALLOW_MISSING_LICENSE_KEY=1` genera un build **degradado**: el server arranca pero
+> rechaza todo `.lic` y, con `LICENSE_STRICT=true`, bloquea el tenant. Solo para CI.
+
+> `npm test` usa una clave de prueba: el `global-setup` la embebe temporalmente y la
+> **restaura al terminar** (el `teardown` de Vitest), de modo que un `npm start`
+> posterior nunca arranca con la clave de prueba.
+
+### Renovación de licencia y sello anti-rollback
+
+El contador anti-rollback (`license_anti_rollback.counter`) es monotónico: sube con cada
+venta y su sello HMAC ata el valor a la licencia que lo emitió (`secret + lic_id`).
+
+- Al **cambiar de licencia** (renovación, `POST /license/upload`, `POST /license/trial`) el
+  sello se **re-liga al `lic_id` nuevo conservando el contador**. Si no, el arranque
+  siguiente lo leería como *"posible manipulación de BD"* y desactivaría el tenant
+  (login 403 + ventas bloqueadas) con una licencia perfectamente válida.
+- Si el tenant quedó **desactivado** por un arranque previo, al arrancar con un `.lic`
+  válido en disco **se reactiva solo** (no hace falta tocar la BD).
+- Si el sello quedó atado a una licencia **anterior** (estados heredados de 0.2.6), se
+  re-liga solo: se demuestra que el sello es auténtico porque valida contra un `lic_id`
+  histórico del mismo tenant registrado en `license_audit`. Queda anotado en la auditoría.
+  Un sello que no valida contra ninguna licencia del tenant sigue tratándose como
+  manipulación de BD y bloquea el tenant.
+
+### Modo desarrollo (`LICENSE_DEV_MODE`)
+
+El `.env` queda **siempre en modo producción** (`LICENSE_STRICT=true`). El modo
+desarrollo lo activa **el script de npm**, no una variable del `.env`:
+
+```bash
+npm run dev     # → cross-env LICENSE_DEV_MODE=true tsx watch src/server.ts
+npm test        # → cross-env LICENSE_DEV_MODE=true vitest run
+npm start       # → sin la bandera: comportamiento estricto (producción)
+```
+
+Con `LICENSE_DEV_MODE` la licencia **nunca bloquea al tenant**: si quedara inactivo o
+vencido se reactiva solo con vigencia extendida (`LICENSE_DEV_DAYS`, 365 por defecto) y
+el middleware de autenticación no devuelve 403 por expiración. El monitor que desactiva
+tenants vencidos tampoco corre. En producción la bandera se ignora: `NODE_ENV=production`
+la anula siempre.
+
+> `LICENSE_DEV_MODE` **no** es una variable de `.env`: si la pones ahí, el `.env` deja de
+> estar en modo producción. Usa siempre `npm run dev`.
+
+### Licencias trial
+
+`POST /license/trial` emite una licencia de **1 día** firmada con la familia de claves
+*trial* (servidor-side). Para que un equipo de pruebas la use:
+
+- el server necesita la clave privada trial (`TRIAL_PRIVATE_KEY_PATH` + `TRIAL_PASS`),
+- y `TRIAL_ENABLED` debe estar en `true` (lo está por defecto; el instalador de Windows
+  lo pone en `false`).
+
+Cuando `TRIAL_ENABLED=false` **o** el server está en modo estricto/producción, la ruta
+responde `403` y **nadie puede auto-activar una licencia trial** sin un `.lic` firmado.
+La clave privada trial ya no se busca en la carpeta de datos ni junto al `.lic` del
+cliente: solo en `TRIAL_PRIVATE_KEY_PATH`, en la carpeta de la clave pública y en
+`tools/keys/` / `tools-posky/keys/`.
+
+> `GET /license/status` es público. En producción **redacta** `lic_id`, `customer` y
+> `features` (solo devuelve `status` y `expires_at`); con token autenticado o en modo
+> desarrollo devuelve el detalle completo.
 
 ---
 
@@ -57,8 +151,10 @@ cp .env.example .env      # luego edita JWT_SECRET (obligatorio) y DB_PROVIDER
 
 | Comando | Descripción |
 |---------|-------------|
-| `npm run dev` | Arranca en desarrollo con hot-reload (`tsx watch src/server.ts`) |
-| `npm run build` | Compila TypeScript a `dist/` (`tsc`) |
+| `npm run dev` | Arranca en desarrollo con hot-reload (`tsx watch src/server.ts`) — **inyecta `LICENSE_DEV_MODE=true`** |
+| `npm test` | Vitest — **inyecta `LICENSE_DEV_MODE=true`** |
+| `npm run build` | Compila TypeScript a `dist/` (`tsc`) — el `prebuild` regenera la clave pública embebida |
+| `npm run build:keys` | Embebe la clave pública Ed25519 en `src/keys/publicKey.ts` (y la trial) |
 | `npm start` | Ejecuta el build (`node dist/server.js`) — requiere `npm run build` antes |
 | `npm run typecheck` | Verifica tipos (`tsc --noEmit`) — debe dar 0 errores |
 | `npm run lint` | ESLint sobre `src/` — debe dar 0 errores |

@@ -6,13 +6,24 @@
  * - Aplica migraciones + seed demo + seed catálogo contra la BD de test.
  * - El env ya fue fijado por setup-env.ts (se re-fija aquí porque
  *   globalSetup corre en su propio proceso).
+ * - IMPORTANTE: exports NAMED (setup/teardown). Vitest 3 ignora el export
+ *   `teardown` si el módulo tiene un `export default` (solo usa el default
+ *   como setup) → la clave de producción no se restauraría.
  * ────────────────────────────────────────────────────────────────────────
  */
-import { rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { generateKeyPairSync } from 'node:crypto'
 import { resolve } from 'node:path'
 
-async function setup(): Promise<void> {
+/**
+ * Clave pública embebida en src/keys/publicKey.ts ANTES de la corrida.
+ * Se guarda para restaurarla en el teardown: los tests necesitan la clave
+ * de prueba embebida, pero si se queda embebida, un `npm start` posterior
+ * (sin rebuild) arrancaría el server con la clave de PRUEBA.
+ */
+let stashedProductionKey: string | null = null
+
+export async function setup(): Promise<void> {
   process.env.DB_PROVIDER = 'sqlite'
   process.env.SQLITE_PATH = './data/pos-test.sqlite'
   process.env.JWT_SECRET = 'test-secret-solo-para-vitest-0123456789abcdef'
@@ -27,6 +38,8 @@ async function setup(): Promise<void> {
   // Seed demo SIN pin forzado: globalSetup corre en proceso aparte y NO hereda
   // setup-env.ts; sin esto, seedDemo usa el default '1' y rompe los logins helper.
   process.env.SEED_DEMO_MUST_CHANGE_PIN = '0'
+  // Nunca tocar ~/.pos/license.lic (la licencia real del usuario).
+  process.env.LICENSE_FILE_PATH = './data/test-license.lic'
 
   /* ── Generar par de claves Ed25519 para tests de licencias ───────────── */
   // El private key se guarda en tests/test-private.pem para firmar .lic de prueba.
@@ -42,11 +55,19 @@ async function setup(): Promise<void> {
     resolve('../tools/keys/test-public.pem'),
     publicKey.export({ type: 'spki', format: 'pem' }),
   )
+  // Guardar la clave de producción embebida (si la hay) para restaurarla al final.
+  const publicKeyPath = resolve('src/keys/publicKey.ts')
+  if (existsSync(publicKeyPath)) {
+    const current = readFileSync(publicKeyPath, 'utf8')
+    if (!current.includes('IS_TEST_KEY = true')) {
+      stashedProductionKey = current
+    }
+  }
   // Regenerar publicKey.ts con la clave de test
   const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' })
   writeFileSync(
-    resolve('src/keys/publicKey.ts'),
-    `/* AUTOGENERADO — no editar. Tests usan clave Ed25519 de prueba. */\nexport const PUBLIC_KEY_PEM = \`${publicKeyPem}\`;\n`,
+    publicKeyPath,
+    `/* AUTOGENERADO — no editar. Tests usan clave Ed25519 de prueba. */\nexport const PUBLIC_KEY_PEM = \`${publicKeyPem}\`;\nexport const IS_TEST_KEY = true;\n`,
   )
 
   rmSync('./data/pos-test.sqlite', { force: true })
@@ -65,4 +86,15 @@ async function setup(): Promise<void> {
   await db.end()
 }
 
-export default setup
+/**
+ * Restaura la clave pública de producción embebida (si existía antes de la
+ * corrida) y borra el .lic de test. Sin esto, `npm test` dejaría el server
+ * con la clave de PRUEBA embebida → rechazaría todas las licencias reales.
+ */
+export async function teardown(): Promise<void> {
+  if (stashedProductionKey) {
+    writeFileSync(resolve('src/keys/publicKey.ts'), stashedProductionKey, 'utf8')
+    stashedProductionKey = null
+  }
+  rmSync(resolve('data/test-license.lic'), { force: true })
+}

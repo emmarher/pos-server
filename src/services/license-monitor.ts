@@ -41,6 +41,8 @@ export function startLicenseMonitor(app: FastifyInstance): { stop: () => void } 
 
   // 2. Verificación de expiración de licencias (casos: .lic expirado en caliente)
   const t2 = setInterval(async () => {
+    // MODO DEV (LICENSE_DEV_MODE): nunca desactivar por expiración.
+    if (env.licenseDevMode) return
     try {
       const now = new Date().toISOString()
       const { rowCount } = await db.query(

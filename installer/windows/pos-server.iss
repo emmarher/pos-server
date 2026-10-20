@@ -238,6 +238,7 @@ begin
     'LICENSE_FILE_PATH=' + DataDir + '\\pos.lic' + #13#10 +
     'PUBLIC_KEY_PATH=' + #13#10 +
     'LICENSE_STRICT=true' + #13#10 +
+    'TRIAL_ENABLED=false' + #13#10 +
     'LICENSE_HMAC_SECRET=' + Hmac + #13#10 +
     'SEED_DEMO_LICENSE_DAYS=0' + #13#10 +
     'SEED_TENANT_CODE=' + Sucursal + #13#10 +
