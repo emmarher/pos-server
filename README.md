@@ -358,7 +358,7 @@ Devuelve el mismo contrato de `data` con tokens renovados.
 
 | Método | Ruta | Permiso | Descripción |
 |--------|------|---------|-------------|
-| GET | `/products` | `products:read` | Listar/buscar (q, category_id, limit 20) |
+| GET | `/products` | `products:read` | Listar/buscar (`q`, `category_id`, `limit` 1–1000, `offset`) |
 | POST | `/products` | `products:create` | Crear producto |
 | GET | `/products/:id` | `products:read` | Detalle |
 | PATCH | `/products/:id` | `products:update` | Actualizar |
@@ -369,6 +369,28 @@ Devuelve el mismo contrato de `data` con tokens renovados.
 | PATCH | `/categories/:id` | `categories:manage` | Actualizar |
 | GET | `/measurement-units` | `products:read` | Unidades (11 de sistema) |
 | GET | `/price-types` | `products:read` | Tipos de precio (Público/Mayoreo) |
+
+#### Paginación y búsqueda del catálogo
+
+`GET /products` devuelve `{ items, total }`. `total` es el **conteo real** de la consulta
+(antes de paginar) → sirve para saber cuántas páginas hay.
+
+- `limit`: **1 a 1000** (default 20). Antes el tope era 50 y el schema 100: pedir más
+  devolvía 50 en silencio o un 400.
+- `offset`: desplazamiento, para paginar.
+- `q`: busca por `name` (LIKE, con o sin acentos), por `internal_code` exacto y por
+  `barcode` exacto.
+- `category_id`: filtra por categoría.
+- Orden: `name ASC` (alfabético) — es el orden en el que se muestran los productos.
+- Con ~1.000 productos, `limit=1000` responde en ~50 ms: los precios de la página se
+  cargan con **2 queries en total** (no una por producto).
+
+> La búsqueda por texto en PostgreSQL usa un índice GIN con `pg_trgm` (migración `008`).
+> La extensión se crea solo si el usuario de BD tiene permisos; si no, la migración
+> avisa por NOTICE y sigue — el buscador funciona igual, solo que con seq scan.
+>
+> En SQLite no hay trigramas: la migración `008` es un no-op y la búsqueda es un LIKE
+> secuencial (suficiente para el volumen de una tienda).
 
 ### Ventas (sales)
 

@@ -1,0 +1,22 @@
+-- 008 — Índice de búsqueda de productos (SQLite)
+--
+-- En PostgreSQL esta migración crea la extensión `pg_trgm` y un índice GIN por
+-- trigramas sobre products(name), que es lo que hace que
+--     (p.name LIKE '%termino%' OR p.internal_code = :t OR p.barcode = :t)
+-- no recorra la tabla entera.
+--
+-- SQLite NO tiene trigramas de serie:
+--   - La extensión FTS5 (CREATE VIRTUAL TABLE ...) da búsqueda por tokens, no
+--     por subcadena, así que no sirve para un LIKE '%termino%'.
+--   - Las demás opciones requieren cargar una extensión compilada, que no se
+--     puede exigir en la instalación de Windows.
+--
+-- Decisión: en SQLite NO se crea ningún índice extra. Los matches exactos
+-- (internal_code, barcode) ya usan los índices b-tree de la migración 001, y
+-- el LIKE por nombre resuelve con un escaneo de la tabla — que con el catálogo
+-- de un punto de venta (cientos o pocos miles de productos) es instantáneo.
+--
+-- Este archivo existe para que el ledger `schema_migrations` registre el mismo
+-- número de migración en ambos proveedores y los dos queden alineados.
+--
+-- Referencia: 008_product_search_index.pg.sql

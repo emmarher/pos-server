@@ -4,6 +4,47 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.9] — 2026-10-20 — El catálogo ya no se corta en 50 productos
+
+### Corregido
+
+- **El catálogo de productos se truncaba a 50 sin avisar**: `searchProducts()` aplicaba
+  `Math.min(Math.max(limit ?? 20, 1), 50)`, así que pedir 100 devolvía 50 y el `total`
+  (805 productos) quedaba escondido detrás de un corte **alfabético** (`ORDER BY name`).
+  Cualquier producto cuyo nombre no empezara con "A" **no aparecía nunca** en el
+  inventario ni en el terminal de venta — el usuario lo veía como "el producto se creó
+  pero no aparece".
+  - El tope sube a **1000** (`MAX_PRODUCT_PAGE_SIZE`) y el schema acepta hasta 1000
+    (antes `maximum: 100` → HTTP 400 al pedir más).
+  - Con `limit=1000` sobre 805 productos: **805 items en ~50 ms**.
+- **N+1 de precios**: `searchProducts()` hacía `Promise.all(rows.map(loadPrices))` →
+  **3 queries por producto** (~2.400 queries por request con 805 productos). Ahora son
+  **2 queries en total** por página, sin importar el tamaño (`attachPrices()`), y `getProduct()`
+  reutiliza el precio base de la fila.
+- **El precio vigente era el equivocado**: con historial de precios por tipo
+  (`UNIQUE(product_id, price_type_id, start_date)`), el `Map` se armaba con el **último**
+  registro (el más antiguo) en lugar del **más reciente**. Ahora gana el vigente
+  (`ORDER BY start_date DESC`, primer registro de cada tipo).
+- `date('now')` en el filtro de vigencia de precios **rompía en PostgreSQL** (es una función
+  de SQLite) → ahora usa `CURRENT_DATE`, portable en ambos motores.
+
+### Añadido
+
+- **Migración `008_product_search_index`**: índice GIN con `pg_trgm` sobre `products.name`
+  para que la búsqueda `LIKE '%x%'` no haga seq scan.
+  - En PostgreSQL la extensión se intenta crear dentro de un `BEGIN/EXCEPTION`: **si el
+    usuario no tiene permisos de superusuario, la migración no falla** (solo un NOTICE) y
+    el instalador sigue. Verificado con un PostgreSQL 16 real: con superusuario crea el
+    índice; sin él, sale con código 0.
+  - En SQLite es un no-op documentado (no hay trigramas; FTS5 no sirve para `LIKE '%x%'`).
+  - El planner lo elige solo cuando la tabla crece (`Bitmap Index Scan` verificado con
+    20.000 filas).
+- **15 tests nuevos** (`tests/products.catalog.test.ts`): límite 120 → 120 items, límite
+  1000 → todo, límite 2000/0/-5 → 400, `total` = conteo real, paginación con `offset` sin
+  repetidos ni saltos, búsqueda por nombre / `internal_code` / `barcode`, precios del listado
+  idénticos a `GET /products/:id`, el precio específico gana sobre el base, con historial gana
+  el vigente, producto sin precios cae al precio base y **aislamiento multi-tenant**.
+
 ## [0.2.8] — 2026-10-20 — Modo desarrollo, cierre del trial y redacción del estado
 
 ### Añadido

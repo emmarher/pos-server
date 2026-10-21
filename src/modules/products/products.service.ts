@@ -272,6 +272,15 @@ function toProduct(row: ProductRow, prices: ProductPrice[]): Product {
   }
 }
 
+/**
+ * Tope máximo de productos por página en GET /products.
+ * Antes el service recortaba a 50 en silencio (y el schema a 100), lo que
+ * hacía invisibles los productos más allá del corte (orden alfabético).
+ * Ahora el límite real lo pide el cliente y este es solo el techo de
+ * seguridad (ver `products.schema.ts`, que aplica el mismo máximo).
+ */
+const MAX_PRODUCT_PAGE_SIZE = 1000
+
 /** SELECT con joins a categoría y unidades (base + venta). */
 const PRODUCT_SELECT = `
   SELECT
@@ -445,7 +454,7 @@ export async function searchProducts(
   tenantId: string,
   params: ProductSearchParams,
 ): Promise<ProductSearchResult> {
-  const limit = Math.min(Math.max(params.limit ?? 20, 1), 50)
+  const limit = Math.min(Math.max(params.limit ?? 20, 1), MAX_PRODUCT_PAGE_SIZE)
   const offset = Math.max(params.offset ?? 0, 0)
 
   const conditions: string[] = ['p.tenant_id = $1']
@@ -486,49 +495,74 @@ export async function searchProducts(
   ])
 
   const total = countRows[0]?.total ?? 0
-  const items = await Promise.all(
-    rows.map(async (row) => {
-      const prices = await loadPrices(tenantId, row.id)
-      return toProduct(row, prices)
-    }),
-  )
-
+  const items = await attachPrices(tenantId, rows)
   return { items, total }
 }
 
 /**
- * Carga los precios vigentes de un producto (RF-CA-004).
- * Devuelve UN precio por cada tipo de precio activo del tenant:
+ * Tipos de precio activos del tenant (1 query, reutilizable para toda la
+ * página de productos).
+ */
+async function activePriceTypes(tenantId: string): Promise<PriceTypeRow[]> {
+  const { rows } = await db.query<PriceTypeRow>(
+    'SELECT id, tenant_id, name, code, is_default, is_active FROM price_types WHERE tenant_id = $1 AND is_active = 1 ORDER BY is_default DESC, name ASC',
+    [tenantId],
+  )
+  return rows
+}
+
+/**
+ * Precios específicos de VARIOS productos en una sola query.
+ * Devuelve: product_id → price_type_id → precio (el más reciente vigente).
+ */
+async function productPricesFor(
+  tenantId: string,
+  productIds: string[],
+): Promise<Map<string, Map<string, ProductPrice>>> {
+  const byProduct = new Map<string, Map<string, ProductPrice>>()
+  if (productIds.length === 0) return byProduct
+
+  // Placeholders $2..$N (el $1 es el tenant_id) — el adaptador SQLite
+  // traduce $N → ? posicional, así el SQL es idéntico en ambos proveedores.
+  const placeholders = productIds.map((_, i) => `$${i + 2}`).join(', ')
+  const { rows: productPrices } = await db.query<ProductPrice>(
+    `SELECT id, product_id, price_type_id, price, min_quantity, start_date, end_date
+     FROM product_prices
+     WHERE tenant_id = $1 AND product_id IN (${placeholders}) AND is_active = 1
+       AND (end_date IS NULL OR end_date >= CURRENT_DATE)
+     ORDER BY start_date DESC`,
+    [tenantId, ...productIds],
+  )
+
+  for (const pp of productPrices) {
+    let byType = byProduct.get(pp.product_id)
+    if (!byType) {
+      byType = new Map<string, ProductPrice>()
+      byProduct.set(pp.product_id, byType)
+    }
+    // El query viene ORDER BY start_date DESC → el PRIMERO de cada tipo es el
+    // vigente (el más reciente). Los siguientes son históricos.
+    if (!byType.has(pp.price_type_id)) byType.set(pp.price_type_id, pp)
+  }
+
+  return byProduct
+}
+
+/**
+ * Arma el array de precios de un producto: UN precio por cada tipo de precio
+ * activo del tenant.
  *   - Si el producto tiene `product_prices` para ese tipo → el específico.
  *   - Si no → el precio base del producto (`products.price`) como fallback.
  * Así la terminal SIEMPRE muestra todos los tipos de precio disponibles
  * (Público, Mayoreo…) aunque el producto no tenga precios registrados.
  */
-async function loadPrices(tenantId: string, productId: string): Promise<ProductPrice[]> {
-  const [priceTypesRes, { rows: productPrices }, { rows: product }] = await Promise.all([
-    db.query<PriceTypeRow>(
-      'SELECT id, tenant_id, name, code, is_default, is_active FROM price_types WHERE tenant_id = $1 AND is_active = 1 ORDER BY is_default DESC, name ASC',
-      [tenantId],
-    ),
-    db.query<ProductPrice>(
-      `SELECT id, product_id, price_type_id, price, min_quantity, start_date, end_date
-       FROM product_prices
-       WHERE tenant_id = $1 AND product_id = $2 AND is_active = 1
-         AND (end_date IS NULL OR end_date >= date('now'))
-       ORDER BY start_date DESC`,
-      [tenantId, productId],
-    ),
-    db.query<{ price: number }>('SELECT price FROM products WHERE tenant_id = $1 AND id = $2', [
-      tenantId,
-      productId,
-    ]),
-  ])
-
-  const basePrice = product[0]?.price ?? 0
-  const priceTypes = priceTypesRes.rows
-  const byType = new Map(productPrices.map(pp => [pp.price_type_id, pp]))
-
-  // Un precio por cada tipo activo; fallback al precio base del producto
+function buildPrices(
+  productId: string,
+  basePrice: number,
+  priceTypes: PriceTypeRow[],
+  byType: Map<string, ProductPrice>,
+  today: string,
+): ProductPrice[] {
   return priceTypes.map(pt => {
     const existing = byType.get(pt.id)
     if (existing) {
@@ -540,10 +574,65 @@ async function loadPrices(tenantId: string, productId: string): Promise<ProductP
       price_type_id: pt.id,
       price: basePrice,
       min_quantity: 1,
-      start_date: new Date().toISOString().slice(0, 10),
+      start_date: today,
       end_date: null,
     }
   })
+}
+
+/**
+ * Adjunta los precios a TODOS los productos de la página.
+ *
+ * ANTES: `Promise.all(rows.map(row => loadPrices(tenantId, row.id)))` → 3
+ * queries POR producto (N+1). Con 805 productos eran ~2.400 queries por
+ * request. AHORA: 2 queries en total, sin importar el tamaño de la página.
+ */
+async function attachPrices(tenantId: string, rows: ProductRow[]): Promise<Product[]> {
+  if (rows.length === 0) return []
+
+  const [priceTypes, byProduct] = await Promise.all([
+    activePriceTypes(tenantId),
+    productPricesFor(tenantId, rows.map((r) => r.id)),
+  ])
+  const today = new Date().toISOString().slice(0, 10)
+
+  return rows.map((row) => {
+    const byType = byProduct.get(row.id) ?? new Map<string, ProductPrice>()
+    return toProduct(row, buildPrices(row.id, row.price ?? 0, priceTypes, byType, today))
+  })
+}
+
+/**
+ * Carga los precios vigentes de UN producto (RF-CA-004).
+ * `basePrice` se pasa si ya viene en la fila (evita una query extra).
+ */
+async function loadPrices(
+  tenantId: string,
+  productId: string,
+  basePrice?: number,
+): Promise<ProductPrice[]> {
+  let price = basePrice
+  if (price === undefined) {
+    const { rows } = await db.query<{ price: number }>(
+      'SELECT price FROM products WHERE tenant_id = $1 AND id = $2',
+      [tenantId, productId],
+    )
+    price = rows[0]?.price ?? 0
+  }
+
+  const [priceTypes, byProduct] = await Promise.all([
+    activePriceTypes(tenantId),
+    productPricesFor(tenantId, [productId]),
+  ])
+  const today = new Date().toISOString().slice(0, 10)
+
+  return buildPrices(
+    productId,
+    price,
+    priceTypes,
+    byProduct.get(productId) ?? new Map<string, ProductPrice>(),
+    today,
+  )
 }
 
 /** GET /products/:id — detalle completo con precios. */
@@ -556,7 +645,7 @@ export async function getProduct(tenantId: string, id: string): Promise<Product>
   if (!row) {
     throw new HttpError('NOT_FOUND', 'Producto no encontrado')
   }
-  const prices = await loadPrices(tenantId, row.id)
+  const prices = await loadPrices(tenantId, row.id, row.price ?? 0)
   return toProduct(row, prices)
 }
 

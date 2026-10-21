@@ -152,7 +152,7 @@ export const productQuerySchema: ApiDataSchema = {
   properties: {
     q: { type: 'string', maxLength: 255 },
     category_id: { type: 'string', minLength: 1 },
-    limit: { type: 'integer', minimum: 1, maximum: 50 },
+    limit: { type: 'integer', minimum: 1, maximum: 1000 },
     offset: { type: 'integer', minimum: 0 },
     active_only: { type: 'string', enum: ['true', 'false'] },
   },
