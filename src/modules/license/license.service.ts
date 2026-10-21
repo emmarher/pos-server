@@ -232,6 +232,18 @@ async function findTenantByLicenseKey(licenseKey: string): Promise<ActiveTenantR
   return rows[0] ?? null
 }
 
+/** Trae un tenant por su id (activo o inactivo). */
+async function getTenantById(tenantId: string): Promise<ActiveTenantRow | null> {
+  const { rows } = await db.query<ActiveTenantRow>(
+    `SELECT id, license_key, name, is_active, license_expires_at, max_devices
+     FROM tenants
+     WHERE id = $1
+     LIMIT 1`,
+    [tenantId],
+  )
+  return rows[0] ?? null
+}
+
 /* ── 4) Aplicar licencia al tenant ────────────────────────────────── */
 
 /**
@@ -887,14 +899,17 @@ export async function issueTrialLicense(tenantId?: string): Promise<LicenseInfo>
  * @returns LicenseStatus para logging en server.ts
  */
 export async function validateLicenseAtStartup(app: FastifyInstance): Promise<LicenseStatus> {
-  const status = await validateLicenseCore(app)
+  // `ctx.tenantId` guarda el tenant sobre el que se evaluó la licencia, para
+  // que el modo dev reactive ESE tenant y no otro cualquiera.
+  const ctx: { tenantId?: string | null } = {}
+  const status = await validateLicenseCore(app, ctx)
 
   if (!env.licenseDevMode) return status
 
   // MODO DEV: la licencia NUNCA deja el server bloqueado. Si el tenant quedó
   // inactivo o vencido se reactiva con vigencia extendida y el server opera
   // como si la licencia fuera válida. En producción esta rama no se ejecuta.
-  await ensureDevTenantUsable(app, status)
+  await ensureDevTenantUsable(app, status, ctx.tenantId ?? null)
 
   // 'missing' (sin .lic → modo degradado) no es un bloqueo: se mantiene el
   // estado para que el log siga mostrando la realidad del archivo.
@@ -905,13 +920,18 @@ export async function validateLicenseAtStartup(app: FastifyInstance): Promise<Li
 /**
  * MODO DEV: garantiza que el tenant quede utilizable.
  * Solo actúa si el tenant está realmente bloqueado (inactivo o vencido).
+ *
+ * @param tenantId tenant evaluado por validateLicenseCore (si se conoce).
  */
 async function ensureDevTenantUsable(
   app: FastifyInstance,
   status: LicenseStatus,
+  tenantId: string | null,
 ): Promise<void> {
-  const tenant = await resolveAnyTenant()
-  if (!tenant) return
+  const tenant = tenantId
+    ? await getTenantById(tenantId)
+    : await resolveInstallationTenant();
+  if (!tenant) return;
   const expMs = new Date(tenant.license_expires_at).getTime()
   const blocked = tenant.is_active !== 1 || !Number.isFinite(expMs) || expMs <= Date.now()
   if (!blocked) return
@@ -927,10 +947,25 @@ async function ensureDevTenantUsable(
   )
 }
 
-/** Resuelve cualquier tenant (activo primero, si no el más antiguo). */
-async function resolveAnyTenant(): Promise<ActiveTenantRow | null> {
-  const active = await getActiveTenant()
-  if (active) return active
+/**
+ * Resuelve el tenant que POSEE esta instalación, de forma DETERMINISTA.
+ *
+ * Por qué: `getActiveTenant()` usaba `LIMIT 1` sin `ORDER BY` → con más de un
+ * tenant en la BD (tests, o un servidor con varias sucursales) la licencia se
+ * validaba contra un tenant ARBITRARIO, y el modo dev reactivaba ese tenant en
+ * vez del que estaba bloqueado. Orden de resolución:
+ *   1. el tenant que tiene fila en `license_state` (el ya licenciado);
+ *   2. el más antiguo (el que sembró el seed al instalar).
+ */
+async function resolveInstallationTenant(): Promise<ActiveTenantRow | null> {
+  const { rows: licensed } = await db.query<ActiveTenantRow>(
+    `SELECT t.id, t.license_key, t.name, t.is_active, t.license_expires_at, t.max_devices
+     FROM tenants t
+     WHERE EXISTS (SELECT 1 FROM license_state ls WHERE ls.tenant_id = t.id)
+     ORDER BY t.created_at ASC
+     LIMIT 1`,
+  )
+  if (licensed[0]) return licensed[0]
   const { rows } = await db.query<ActiveTenantRow>(
     `SELECT id, license_key, name, is_active, license_expires_at, max_devices
      FROM tenants
@@ -940,7 +975,10 @@ async function resolveAnyTenant(): Promise<ActiveTenantRow | null> {
   return rows[0] ?? null
 }
 
-async function validateLicenseCore(app: FastifyInstance): Promise<LicenseStatus> {
+async function validateLicenseCore(
+  app: FastifyInstance,
+  ctx: { tenantId?: string | null } = {},
+): Promise<LicenseStatus> {
   // Check prod con clave de prueba (P8): si LICENSE_STRICT y la clave embebida
   // es la de test (la generan los tests), advertir loudly.
   if (env.licenseStrict && IS_TEST_KEY) {
@@ -949,38 +987,52 @@ async function validateLicenseCore(app: FastifyInstance): Promise<LicenseStatus>
   if (!PUBLIC_KEY_PEM) {
     app.log.warn('Sin PUBLIC_KEY_PEM embebida — verificacion Ed25519 deshabilitada (modo degradado)')
   }
-  let tenant = await getActiveTenant()
   const licContent = loadLicenseFile()
   let preverified: LicensePayload | null = null
+  let tenant: ActiveTenantRow | null = null
 
-  if (!tenant) {
-    /* No hay tenant activo. Puede ser una instalación fresh O un tenant que un
-       arranque previo desactivó (licencia vencida o gracia expirada). Si hay un
-       .lic en disco con firma válida, este manda: se resuelve su tenant y se
-       re-valida (así el tenant se reactiva solo en vez de quedar bloqueado). */
-    if (licContent) {
-      const verification = verifyLicenseSignature(licContent)
-      if (verification.valid && verification.payload) {
-        const candidate = await findTenantByLicenseKey(verification.payload.license_key)
-        if (candidate) {
+  /* Resolución DETERMINISTA del tenant dueño de la instalación.
+     Antes se usaba `getActiveTenant()` (LIMIT 1 sin ORDER BY) → con más de un
+     tenant en la BD la licencia se validaba contra un tenant ARBITRARIO (y el
+     modo dev reactivaba ese en vez del que estaba bloqueado). Ahora:
+       1. si hay un .lic con firma válida → su license_key identifica al tenant;
+       2. si no, el tenant que tiene license_state (el ya licenciado);
+       3. si no, el más antiguo (el que sembró el seed al instalar). */
+  if (licContent) {
+    const verification = verifyLicenseSignature(licContent)
+    if (verification.valid && verification.payload) {
+      const candidate = await findTenantByLicenseKey(verification.payload.license_key)
+      if (candidate) {
+        if (candidate.is_active !== 1) {
           app.log.warn(
             `Tenant ${candidate.license_key} inactivo — re-validando su licencia en disco`,
           )
-          tenant = candidate
-          preverified = verification.payload
         }
-      } else {
+        tenant = candidate
+        preverified = verification.payload
+      }
+    } else {
+      // Firma inválida: si no hay ningún tenant al que aplicarla, se bloquea.
+      const active = await getActiveTenant()
+      if (!active) {
         app.log.error(
           `Licencia inválida (firma) en ${env.licenseFilePath} y sin tenant activo — servidor bloqueado`,
         )
         return 'invalid'
       }
     }
-    if (!tenant) {
-      app.log.warn('No hay tenant activo — sin licencia que validar')
-      return 'missing'
-    }
   }
+
+  if (!tenant) {
+    tenant = await resolveInstallationTenant()
+  }
+
+  if (!tenant) {
+    app.log.warn('No hay tenant activo — sin licencia que validar')
+    return 'missing'
+  }
+
+  ctx.tenantId = tenant.id
 
   const { id: tenantId, license_key: tenantLicenseKey } = tenant
 

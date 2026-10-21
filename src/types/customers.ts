@@ -13,7 +13,6 @@ export interface Customer {
   id: string
   tenant_id: string
   name: string
-  description: string | null
   phone: string | null
   email: string | null
   address: string | null
@@ -48,7 +47,6 @@ export interface CustomerQuery {
 /** Payload de creación/actualización de cliente (espejo de customerCreateBodySchema). */
 export interface CustomerInput {
   name: string
-  description?: string | null
   phone?: string | null
   email?: string | null
   address?: string | null

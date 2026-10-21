@@ -59,13 +59,13 @@ export function customersRoutes(app: FastifyInstance): void {
     async (request: AuthedRequest) => {
       const query = request.query as {
         q?: string
-        activeOnly?: string
+        active_only?: string
         limit?: number
         offset?: number
       }
       const result = await listCustomers(request.user.tenant_id, {
         q: query.q,
-        activeOnly: query.activeOnly === undefined ? true : query.activeOnly === 'true',
+        activeOnly: query.active_only === undefined ? true : query.active_only === 'true',
         limit: query.limit,
         offset: query.offset,
       })

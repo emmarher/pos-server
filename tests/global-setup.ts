@@ -74,6 +74,10 @@ export async function setup(): Promise<void> {
   rmSync('./data/pos-test.sqlite-journal', { force: true })
   rmSync('./data/pos-test.sqlite-wal', { force: true })
   rmSync('./data/pos-test.sqlite-shm', { force: true })
+  // El .lic de test también se borra al ARRANCAR (no solo al terminar): si
+  // quedó uno de la corrida anterior, `validateLicenseAtStartup` lo leería y
+  // el estado inicial del tenant dependería de la corrida previa.
+  rmSync(resolve('data/test-license.lic'), { force: true })
 
   const { runMigrations } = await import('../src/database/migrate.js')
   const { seedDemo } = await import('../src/database/seed.js')

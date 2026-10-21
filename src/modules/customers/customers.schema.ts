@@ -26,7 +26,6 @@ export const customerSchema: ApiDataSchema = {
     id: { type: 'string' },
     tenant_id: { type: 'string' },
     name: { type: 'string' },
-    description: { type: ['string', 'null'] },
     phone: { type: ['string', 'null'] },
     email: { type: ['string', 'null'] },
     address: { type: ['string', 'null'] },
@@ -71,7 +70,6 @@ export const customerCreateBodySchema: ApiDataSchema = {
   additionalProperties: false,
   properties: {
     name: { type: 'string', minLength: 1, maxLength: 255 },
-    description: { type: ['string', 'null'], maxLength: 500 },
     phone: { type: ['string', 'null'], maxLength: 20 },
     email: { type: ['string', 'null'], maxLength: 255 },
     address: { type: ['string', 'null'], maxLength: 500 },

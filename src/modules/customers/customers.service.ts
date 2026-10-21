@@ -39,34 +39,37 @@ export async function listCustomers(
   const offset = Math.max(params.offset ?? 0, 0);
   const q = params.q?.trim() ?? '';
 
+  // Condiciones construidas con placeholders correlativos: el WHERE se arma
+  // con ' AND ' (sin 'AND' inicial) para que la consulta sea válida en
+  // SQLite y PostgreSQL. El orden de los placeholders SIEMPRE coincide con
+  // el de `values`.
+  const conditions: string[] = ['c.tenant_id = $1'];
   const values: unknown[] = [tenantId];
-  const cond = 2;
+  let paramIndex = 2;
 
   if (activeOnly) {
-    values.push(1);
+    conditions.push('c.is_active = 1');
+  }
+  if (q) {
+    conditions.push(`(c.name LIKE $${paramIndex} OR c.rfc LIKE $${paramIndex + 1})`);
+    values.push(`%${q}%`, `%${q}%`);
+    paramIndex += 2;
   }
 
-  const searchCond = q
-    ? 'AND (c.name LIKE \'%\' || $' + cond + ' OR c.rfc LIKE \'%\' || $' + (cond + 1) + ')'
-    : '';
-
-  values.push('%' + q + '%', '%' + q + '%');
-
-  const whereSql =
-    (activeOnly ? 'AND c.is_active = 1 AND' : '') + ' c.tenant_id = $1 ' + (q ? searchCond : '');
+  const whereSql = conditions.join(' AND ');
 
   // Placeholders de paginación: van después de tenant + activeOnly + q
-  const limitPlaceholder = values.length + 1;
-  const offsetPlaceholder = values.length + 2;
+  const limitPlaceholder = paramIndex;
+  const offsetPlaceholder = paramIndex + 1;
   const pageValues = [...values, limit, offset];
 
   const [{ rows: countRows }, { rows }] = await Promise.all([
     db.query<{ total: number }>(`
-      SELECT COUNT(*) AS total FROM customers c ${whereSql} GROUP BY c.id`,
+      SELECT COUNT(*) AS total FROM customers c WHERE ${whereSql}`,
       values,
     ),
     db.query<CustomerRow>(`
-      SELECT c.id, c.tenant_id, c.name, c.description, c.phone, c.email, c.address,
+      SELECT c.id, c.tenant_id, c.name, c.phone, c.email, c.address,
         c.rfc, c.credit_limit, c.current_balance, c.loyalty_points,
         c.loyalty_points_value, c.is_active, c.created_at, c.updated_at,
         COALESCE(SUM(cc.amount), 0) AS total_credit
@@ -83,7 +86,6 @@ export async function listCustomers(
     id: r.id,
     tenant_id: r.tenant_id,
     name: r.name,
-    description: r.description,
     phone: r.phone,
     email: r.email,
     address: r.address,
@@ -103,7 +105,7 @@ export async function listCustomers(
 /** Obtiene un cliente por ID con balance calculado. */
 export async function getCustomer(tenantId: string, id: string): Promise<Customer> {
   const { rows } = await db.query<CustomerRow>(`
-    SELECT c.id, c.tenant_id, c.name, c.description, c.phone, c.email, c.address,
+    SELECT c.id, c.tenant_id, c.name, c.phone, c.email, c.address,
       c.rfc, c.credit_limit, c.current_balance, c.loyalty_points, c.loyalty_points_value,
       c.is_active, c.created_at, c.updated_at,
       COALESCE(SUM(cc.amount), 0) AS total_credit
@@ -120,7 +122,6 @@ export async function getCustomer(tenantId: string, id: string): Promise<Custome
     id: customer.id,
     tenant_id: customer.tenant_id,
     name: customer.name,
-    description: customer.description,
     phone: customer.phone,
     email: customer.email,
     address: customer.address,
@@ -140,28 +141,24 @@ export async function createCustomer(
   tenantId: string,
   input: CustomerInput,
 ): Promise<Customer> {
-  const now = 'now';
+  const now = new Date().toISOString();
   const { rows } = await db.query<CustomerRow>(`
     INSERT INTO customers
-       (tenant_id, name, description, phone, email, address, rfc,
+       (tenant_id, name, phone, email, address, rfc,
         credit_limit, current_balance, loyalty_points, loyalty_points_value,
         is_active, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $8, $9, $10, $10)
-     RETURNING id, tenant_id, name, description, phone, email, address,
-               rfc, credit_limit, current_balance, loyalty_points,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0, 0, $8, $9, $9)
+     RETURNING id, tenant_id, name, phone, email, address, rfc,
+               credit_limit, current_balance, loyalty_points,
                loyalty_points_value, is_active, created_at, updated_at`,
     [
       tenantId,
       input.name.trim(),
-      input.description ?? null,
       input.phone ?? null,
       input.email ?? null,
       input.address ?? null,
       input.rfc ?? null,
       input.credit_limit ?? 0,
-      0,
-      0,
-      0,
       input.is_active === false ? 0 : 1,
       now,
     ],
@@ -182,13 +179,12 @@ export async function updateCustomer(
   input: Partial<CustomerInput>,
 ): Promise<Customer> {
   const current = await getCustomer(tenantId, id);
-  const now = 'now';
+  const now = new Date().toISOString();
 
   const updateQ =
-    'UPDATE customers SET name = $3, description = $4, phone = $5, email = $6, address = $7, rfc = $8, credit_limit = $9, is_active = $10, updated_at = $11 WHERE tenant_id = $1 AND id = $2 RETURNING id, tenant_id, name, description, phone, email, address, rfc, credit_limit, current_balance, loyalty_points, loyalty_points_value, is_active, created_at, updated_at';
+    'UPDATE customers SET name = $3, phone = $4, email = $5, address = $6, rfc = $7, credit_limit = $8, is_active = $9, updated_at = $10 WHERE tenant_id = $1 AND id = $2 RETURNING id, tenant_id, name, phone, email, address, rfc, credit_limit, current_balance, loyalty_points, loyalty_points_value, is_active, created_at, updated_at';
   const vals = [tenantId, id,
     input.name ?? current.name,
-    input.description ?? current.description,
     input.phone ?? current.phone,
     input.email ?? current.email,
     input.address ?? current.address,
@@ -254,7 +250,7 @@ export async function makeCreditAdjustment(
     throw new HttpError('CONFLICT', creditCheck.message);
   }
 
-  const now = 'now';
+  const now = new Date().toISOString();
   const newBalance = creditCheck.newBalance;
 
   await db.query(

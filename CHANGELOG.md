@@ -4,6 +4,62 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.10] — 2026-10-21 — El módulo de clientes vuelve a funcionar
+
+### Corregido
+
+El módulo de clientes (RF-VE-005) estaba roto **de punta a punta** y nunca se había
+ejecutado en vivo (no hay pantalla de clientes en pos-desktop ni pos-mobile): `GET /customers`
+devolvía **500 `near "AND": syntax error`** y `POST /customers` devolvía **500
+`table customers has no column named description`**.
+
+- **El `WHERE` se armaba con un `AND` inicial**: `whereSql` empezaba por
+  `'AND c.is_active = 1 AND'` → la consulta quedaba `WHERE AND …` → error de sintaxis
+  en SQLite y PostgreSQL. Ahora las condiciones se arman con placeholders correlativos
+  (`conditions.join(' AND ')`), igual que `searchProducts()`.
+- **Los placeholders de la búsqueda iban corridos**: con el filtro de activos activo, el
+  `q` comparaba contra el `1` del `is_active` en vez de contra el texto buscado. Ahora
+  `q` y `active_only` van con su índice real.
+- **`total` devolvía siempre 1**: el `COUNT(*)` llevaba `GROUP BY c.id` (necesario para
+  el `SUM` del `LEFT JOIN`, no para el conteo) → una fila por grupo y se leía la primera.
+  Ahora el conteo es `SELECT COUNT(*) … WHERE …` sin `GROUP BY`.
+- **`customers.description` no existe**: la columna no está en
+  `esquema_BD_POS_v4_completo.sql` (la tabla `customers` no la tiene) pero el código la
+  leía y la insertaba. Se eliminó de `Customer`/`CustomerInput`, del SELECT, del INSERT,
+  del UPDATE y del JSON Schema de la API (el PRD tampoco la pide).
+- **El `INSERT` tenía 14 columnas y 13 placeholders** y mapeaba `credit_limit` en
+  `current_balance`, `loyalty_points` y `loyalty_points_value`. Ahora son 13 columnas,
+  13 placeholders y los tres contadores arrancan en 0.
+- **`created_at`/`updated_at` se guardaban con el texto literal `'now'`** (no es una
+  fecha). Ahora se usa `new Date().toISOString()`, como el resto del servidor.
+- **`active_only` nunca llegaba al servicio**: el route leía `query.activeOnly`
+  (camelCase) mientras el schema declara `active_only` (snake_case, como en
+  `/products`) → AJV eliminaba el parámetro y el filtro nunca se aplicaba.
+
+### Corregido (licencias)
+
+- **La validación de la licencia se aplicaba a un tenant arbitrario**: `getActiveTenant()`
+  usaba `LIMIT 1` sin `ORDER BY` → con más de un tenant en la BD la licencia se validaba
+  contra el primero que saliera, y el modo dev reactivaba **ese** tenant en vez del que
+  estaba bloqueado (el servidor quedaba con el tenant de la instalación deshabilitado).
+  Ahora el tenant se resuelve de forma determinista: (1) el `license_key` del `.lic`
+  válido, (2) el tenant con fila en `license_state`, (3) el más antiguo.
+
+### Añadido
+
+- `tests/customers.test.ts` — 10 pruebas del módulo de clientes (listado, búsqueda por
+  nombre y RFC, `active_only=false`, paginación, aislamiento multi-tenant, alta, detalle,
+  edición, cargo de crédito y rechazo por límite excedido).
+- `tests/global-setup.ts` borra `data/test-license.lic` **al arrancar** la corrida (no
+  solo al terminarla): si quedaba uno de la corrida anterior, el estado inicial del
+  tenant dependía de la corrida previa.
+
+### Tests
+
+- **66 en verde** (antes 56): 41 previos + 15 del catálogo + 10 de clientes.
+- Nota: `tests/auth-pin.test.ts` y `tests/products.image.test.ts` dependen del orden de
+  sus propios casos (fallan solo con `--sequence.shuffle`, que nadie usa en CI).
+
 ## [0.2.9] — 2026-10-20 — El catálogo ya no se corta en 50 productos
 
 ### Corregido
