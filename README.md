@@ -475,8 +475,8 @@ pos-server/
 │   │                       #   (print, scale, sync, reports — pendientes)
 │   ├── services/           # udp-discovery.ts, storage.service.ts (RustFS S3) (+ sync-engine futuro)
 │   └── types/              # auth, customers, products, sales, inventory, response, errors
-├── migrations/             # 001_init … 004 (sqlite) — aplicar con npm run migrate
-├── tests/                  # (pendiente)
+├── migrations/             # 001_init … 008 (sqlite + pg) — aplicar con npm run migrate
+├── tests/                  # vitest (auth, licencias, catálogo, clientes, imágenes, storage)
 ├── data/                   # SQLite de dev (ignorado por git)
 ├── IMPLEMENTATION_STATUS.md  # Estado por fase (fuente de verdad del avance)
 └── CHANGELOG.md              # Historial de versiones
