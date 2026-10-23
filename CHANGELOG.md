@@ -4,6 +4,40 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.11] — 2026-10-23 — El catálogo demo ahora es solo de abarrotes
+
+### Cambiado
+
+- **`npm run seed:catalog` ya no siembra ~800 productos sintéticos en 16 categorías.**
+  Ahora crea **una sola categoría (`Abarrotes`, prefijo `ABR`)** con **102 productos
+  reales** de abarrotes, sin variantes `v1/v2`. Cada producto conserva sus 3 precios:
+  Público (RETAIL), Mayoreo (WHOLESALE −10 %) y Especial (SPECIAL +15 %).
+- La **idempotencia ahora es por nombre dentro de `Abarrotes`** (antes cortaba con
+  "si ya hay ≥800 productos activos", por lo que el catálogo nunca se actualizaba).
+  Se puede re-ejecutar y solo inserta los productos que falten.
+- El `barcode` se deriva del nombre (hash FNV-1a con prefijo `750`), así que reejecutar
+  el seed produce el mismo código y no hay colisiones entre productos.
+
+### Añadido
+
+- **`npm run seed:catalog:reset`** (`src/database/reset-catalog.ts`): limpieza
+  destructiva para dev/demo que deja el tenant `DEMO-0001` con:
+  - **0 ventas** (borra `sales` y, por cascada, `sale_items`, `sale_payments`,
+    `stored_tickets`, `service_quality_events` y `cashier_cut_sales`),
+  - **0 movimientos de inventario** y 0 renglones de pedidos,
+  - **0 productos** (cascada a `product_prices`, `product_discounts`, `inventory_lots`
+    e `inventory_alerts`),
+  - **solo la categoría `Abarrotes`**,
+  - el **folio de ventas en 0** (la siguiente venta es `V-000001`).
+  Imprime las filas borradas por paso. **Aborta si `DB_PROVIDER=postgres`** salvo que se
+  pase `--force` (solo dev).
+
+### Notas
+
+- `tests/global-setup.ts` sigue llamando a `seedCatalog()`; las pruebas del catálogo
+  crean sus propios 130 productos en tenants fixture, así que el cambio no las afecta
+  (66/66 en verde).
+
 ## [0.2.10] — 2026-10-21 — El módulo de clientes vuelve a funcionar
 
 ### Corregido

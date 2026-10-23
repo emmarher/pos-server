@@ -459,6 +459,30 @@ Devuelve el mismo contrato de `data` con tokens renovados.
 | Tipos de precio | Público (default), Mayoreo |
 | Permisos | 25 códigos del PRD (mapa en IMPLEMENTATION_STATUS.md) |
 
+### Catálogo demo (solo abarrotes)
+
+`npm run seed:catalog` siembra el catálogo de la tienda de ejemplo. Desde la
+**0.2.11** solo crea la categoría **`Abarrotes`** con **102 productos reales**
+(1 nombre = 1 producto, sin variantes sintéticas `v1/v2` ni categorías de otros
+giros). Cada producto lleva sus 3 precios: Público (RETAIL), Mayoreo
+(WHOLESALE −10 %) y Especial (SPECIAL +15 %).
+
+Es **idempotente por nombre**: se puede correr varias veces y solo inserta los
+productos que falten.
+
+```bash
+# sembrar / completar el catálogo de abarrotes
+npm run seed:catalog
+
+# DESTRUCTIVO (dev/demo): borra ventas, movimientos, productos y las demás
+# categorías, reinicia el folio y vuelve a sembrar los abarrotes
+npm run seed:catalog:reset
+```
+
+> `seed:catalog:reset` aborta si `DB_PROVIDER=postgres` (producción) salvo que se
+> pase `--force`. Deja el tenant `DEMO-0001` con 0 ventas, 0 movimientos, solo la
+> categoría `Abarrotes` y el folio en `V-000000`.
+
 ---
 
 ## Estructura del proyecto
@@ -469,7 +493,7 @@ pos-server/
 │   ├── app.ts              # buildApp(): Fastify + JWT + CORS + módulos + error handler
 │   ├── server.ts           # Arranque + UDP discovery + apagado ordenado
 │   ├── config/env.ts       # Variables de entorno validadas y tipadas
-│   ├── database/           # Cliente unificado (client.ts, pool.ts, sqlite.ts) + migrate/seed
+│   ├── database/           # Cliente unificado + migrate/seed/seed-catalog/reset-catalog
 │   ├── middleware/auth.ts  # authenticate + requirePermission
 │   ├── modules/            # auth, products, sales, inventory, customers, cashier
 │   │                       #   (print, scale, sync, reports — pendientes)
