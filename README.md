@@ -378,19 +378,28 @@ Devuelve el mismo contrato de `data` con tokens renovados.
 - `limit`: **1 a 1000** (default 20). Antes el tope era 50 y el schema 100: pedir más
   devolvía 50 en silencio o un 400.
 - `offset`: desplazamiento, para paginar.
-- `q`: busca por `name` (LIKE, con o sin acentos), por `internal_code` exacto y por
-  `barcode` exacto.
+- `q`: busca por `name` **sin importar acentos ni mayúsculas** (`azucar` → "Azúcar",
+  `pina` → "Piña", `AZUCAR` → "Azúcar"), por `internal_code` exacto (ignora
+  mayúsculas) y por `barcode` exacto.
 - `category_id`: filtra por categoría.
 - Orden: `name ASC` (alfabético) — es el orden en el que se muestran los productos.
 - Con ~1.000 productos, `limit=1000` responde en ~50 ms: los precios de la página se
   cargan con **2 queries en total** (no una por producto).
 
-> La búsqueda por texto en PostgreSQL usa un índice GIN con `pg_trgm` (migración `008`).
-> La extensión se crea solo si el usuario de BD tiene permisos; si no, la migración
-> avisa por NOTICE y sigue — el buscador funciona igual, solo que con seq scan.
+> **Búsqueda sin acentos (migración `009`).** `products.name_normalized` guarda el
+> nombre en minúsculas y sin acentos (`á é í ó ú ü ñ ç` → `a e i o u u n c`), mantenido
+> por triggers al insertar y al renombrar. El término del usuario se normaliza igual
+> (`normalizeSearchText()` en `src/modules/products/product-text.ts`) y se compara con
+> `name_normalized LIKE '%…%'`. Si se agregan caracteres al mapa, hay que actualizar
+> **la migración y** `normalizeSearchText()` a la vez.
+
+> La búsqueda por texto en PostgreSQL usa un índice GIN con `pg_trgm` (migración `008`)
+> y otro sobre `name_normalized` (migración `009`). La extensión se crea solo si el
+> usuario de BD tiene permisos; si no, la migración avisa por NOTICE y sigue — el
+> buscador funciona igual, solo que con seq scan.
 >
-> En SQLite no hay trigramas: la migración `008` es un no-op y la búsqueda es un LIKE
-> secuencial (suficiente para el volumen de una tienda).
+> En SQLite no hay trigramas: las migraciones `008`/`009` son un no-op en ese sentido y
+> la búsqueda es un LIKE secuencial (suficiente para el volumen de una tienda).
 
 ### Ventas (sales)
 
@@ -499,7 +508,7 @@ pos-server/
 │   │                       #   (print, scale, sync, reports — pendientes)
 │   ├── services/           # udp-discovery.ts, storage.service.ts (RustFS S3) (+ sync-engine futuro)
 │   └── types/              # auth, customers, products, sales, inventory, response, errors
-├── migrations/             # 001_init … 008 (sqlite + pg) — aplicar con npm run migrate
+├── migrations/             # 001_init … 009 (sqlite + pg) — aplicar con npm run migrate
 ├── tests/                  # vitest (auth, licencias, catálogo, clientes, imágenes, storage)
 ├── data/                   # SQLite de dev (ignorado por git)
 ├── IMPLEMENTATION_STATUS.md  # Estado por fase (fuente de verdad del avance)

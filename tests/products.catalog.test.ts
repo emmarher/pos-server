@@ -336,6 +336,62 @@ describe('Catálogo de productos', () => {
     expect(data.items[0].id).toBe(conCat)
   })
 
+  /* ── 3b) Búsqueda sin acentos ni mayúsculas (migración 009) ─────────── */
+
+  it('encuentra "Azúcar" escribiendo azucar, AZUCAR o azúcar', async () => {
+    const azucarId = await insertProduct(sessionA.tenantId, 'Azúcar Estándar Test')
+
+    for (const q of ['azucar', 'AZUCAR', 'Azúcar', '  azucar  ', 'AZÚCAR']) {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/products?q=${encodeURIComponent(q)}`,
+        headers: { authorization: `Bearer ${sessionA.token}` },
+      })
+      const data = res.json().data as { items: { id: string }[]; total: number }
+      expect(data.total, `q="${q}"`).toBe(1)
+      expect(data.items[0].id, `q="${q}"`).toBe(azucarId)
+    }
+  })
+
+  it('encuentra "Piña" escribiendo pina (eñe)', async () => {
+    const pinaId = await insertProduct(sessionA.tenantId, 'Piña Colada Test')
+    const res = await app.inject({
+      method: 'GET',
+      url: '/products?q=pina',
+      headers: { authorization: `Bearer ${sessionA.token}` },
+    })
+    const data = res.json().data as { items: { id: string }[]; total: number }
+    expect(data.total).toBe(1)
+    expect(data.items[0].id).toBe(pinaId)
+  })
+
+  it('al renombrar un producto el trigger actualiza name_normalized', async () => {
+    const id = await insertProduct(sessionA.tenantId, 'Producto Sin Nombre Test')
+    await db.query('UPDATE products SET name = $1 WHERE id = $2', [
+      'Jamón Serrano Test',
+      id,
+    ])
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/products?q=jamon',
+      headers: { authorization: `Bearer ${sessionA.token}` },
+    })
+    const data = res.json().data as { items: { id: string }[]; total: number }
+    expect(data.total).toBe(1)
+    expect(data.items[0].id).toBe(id)
+  })
+
+  it('la búsqueda sin acentos respeta el aislamiento por tenant', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/products?q=azucar',
+      headers: { authorization: `Bearer ${sessionB.token}` },
+    })
+    const data = res.json().data as { items: unknown[]; total: number }
+    expect(data.total).toBe(0)
+  })
+
   /* ── 4) Precios ────────────────────────────────────────────────────── */
 
   it('los precios del listado coinciden EXACTAMENTE con GET /products/:id', async () => {

@@ -4,6 +4,45 @@ Todas las fechas son `YYYY-MM-DD`. Formato inspirado en
 [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 El backend es un repositorio independiente (`pos-server/`).
 
+## [0.2.12] — 2026-10-23 — El buscador ignora acentos y mayúsculas
+
+### Corregido
+
+- **Buscar "azucar" no encontraba "Azúcar"**, "pina" no encontraba "Piña" y "cafe" no
+  encontraba "Café": `searchProducts()` comparaba `p.name LIKE '%término%'` sin
+  normalizar. Además, en **PostgreSQL `LIKE` distingue mayúsculas**, así que "arroz"
+  tampoco habría encontrado "Arroz" en producción (en SQLite pasaba desapercibido
+  porque su `LIKE` es case-insensitive para ASCII).
+- Ahora la comparación es contra la nueva columna **`products.name_normalized`**
+  (minúsculas y sin acentos) y el término del usuario se normaliza con la misma regla
+  (`normalizeSearchText()`, `src/modules/products/product-text.ts`):
+  `azucar`, `AZUCAR`, `Azúcar` y `  azucar  ` devuelven el mismo producto.
+- La búsqueda exacta por `internal_code` ahora también ignora mayúsculas
+  (`abr0007` encuentra `ABR0007`); `barcode` se sigue comparando exacto.
+
+### Añadido
+
+- **Migración `009_product_name_normalized`** (`sqlite` + `pg`):
+  - Columna `name_normalized` con backfill de los productos existentes.
+  - Índice `idx_products_name_normalized (tenant_id, name_normalized)` y, en
+    PostgreSQL, índice GIN con `pg_trgm` creado dentro de un bloque `DO` guardado
+    (si el usuario de BD no puede crear la extensión, avisa por NOTICE y sigue).
+  - Triggers que mantienen la columna al insertar y al renombrar:
+    `trg_products_name_norm_insert` / `trg_products_name_norm_update` (SQLite) y
+    `trg_products_name_normalized` (PostgreSQL). El UPDATE interno solo toca
+    `name_normalized`, así que no re-dispara el trigger ni `product_count`.
+- **4 pruebas nuevas** en `tests/products.catalog.test.ts`: acentos varios
+  (`azucar`/`AZUCAR`/`Azúcar`/`AZÚCAR`/espacios), eñe (`pina` → `Piña`), renombrado con
+  trigger y aislamiento por tenant. Total del suite: **70/70**.
+
+### Notas
+
+- Los frontends (pos-desktop, pos-mobile) **no cambian**: ambos buscan con
+  `GET /products?q=`, así que el fix aplica a los dos sin recompilar.
+- Mapa de normalización: `á é í ó ú ü ñ ç` → `a e i o u u n c` (y sus mayúsculas).
+  Si se agregan caracteres, hay que actualizar la migración **y**
+  `normalizeSearchText()`.
+
 ## [0.2.11] — 2026-10-23 — El catálogo demo ahora es solo de abarrotes
 
 ### Cambiado

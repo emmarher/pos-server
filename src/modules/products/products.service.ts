@@ -19,6 +19,7 @@
  */
 import { db } from '../../database/client.js'
 import { HttpError } from '../../types/errors.js'
+import { normalizeSearchText } from './product-text.js'
 import type {
   Category,
   MeasurementUnit,
@@ -445,10 +446,15 @@ export async function listPriceTypes(tenantId: string): Promise<PriceType[]> {
 /* ── Productos (RF-CA-002) ────────────────────────────────────────────── */
 
 /**
- * Búsqueda de productos (RF-CA-006): por nombre (LIKE), internal_code,
- * barcode y categoría. Limit default 20. Los precios de cada producto se
- * resuelven al tipo de precio DEFAULT del tenant en la respuesta (el
- * cajero puede cambiar el tipo con GET /products/:id/prices).
+ * Búsqueda de productos (RF-CA-006): por nombre, internal_code, barcode y
+ * categoría. Limit default 20. Los precios de cada producto se resuelven al
+ * tipo de precio DEFAULT del tenant en la respuesta (el cajero puede cambiar
+ * el tipo con GET /products/:id/prices).
+ *
+ * El nombre se compara contra `name_normalized` (minúsculas y sin acentos,
+ * mantenida por los triggers de la migración 009), así "azucar", "AZUCAR" y
+ * "Azúcar" encuentran el mismo producto también en PostgreSQL (donde LIKE
+ * distingue mayúsculas).
  */
 export async function searchProducts(
   tenantId: string,
@@ -470,12 +476,26 @@ export async function searchProducts(
   }
   if (params.q && params.q.trim() !== '') {
     const term = params.q.trim()
-    // Búsqueda amplia: nombre LIKE + coincidencias exactas por código.
-    conditions.push(
-      `(p.name LIKE $${paramIndex} OR p.internal_code = $${paramIndex + 1} OR p.barcode = $${paramIndex + 2})`,
+    // Búsqueda amplia: nombre normalizado (minúsculas, sin acentos) +
+    // coincidencias exactas por código. `normalized` se compara contra la
+    // columna que mantienen los triggers de la migración 009.
+    const normalized = normalizeSearchText(term)
+    const parts: string[] = []
+    if (normalized !== '') {
+      parts.push(
+        `COALESCE(p.name_normalized, lower(p.name)) LIKE $${paramIndex}`,
+      )
+      values.push(`%${normalized}%`)
+      paramIndex++
+    }
+    // Los códigos se comparan exactos; internal_code se guarda en MAYÚSCULAS.
+    parts.push(
+      `p.internal_code = $${paramIndex}`,
+      `p.barcode = $${paramIndex + 1}`,
     )
-    values.push(`%${term}%`, term, term)
-    paramIndex += 3
+    values.push(term.toUpperCase(), term)
+    paramIndex += 2
+    conditions.push(`(${parts.join(' OR ')})`)
   }
 
   const whereSql = conditions.join(' AND ')
