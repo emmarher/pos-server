@@ -128,6 +128,7 @@ export const authDataSchema: ApiDataSchema = {
         address: { type: ['string', 'null'] },
         phone: { type: ['string', 'null'] },
         receipt_footer: { type: ['string', 'null'] },
+        logo_url: { type: ['string', 'null'] },
       },
     },
     device: {

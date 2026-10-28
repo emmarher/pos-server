@@ -55,6 +55,15 @@ export interface SaleHistoryRow {
   created_at: string
 }
 
+/** Producto más vendido en el periodo. */
+export interface TopProduct {
+  product_id: string
+  product_name: string
+  units: number
+  tickets: number
+  revenue: number
+}
+
 /** Resumen con paginación del historial. */
 export interface SalesHistoryResult {
   items: SaleHistoryRow[]
@@ -206,4 +215,45 @@ export async function salesHistory(
     items: rows,
     total: countRows[0]?.total ?? 0,
   }
+}
+
+
+/**
+ * Productos más vendidos en un rango (RF-PR).
+ * - units: cantidad vendida en unidad base (sale_items.base_quantity).
+ * - tickets: ventas distintas que incluyeron el producto.
+ * - revenue: ingreso por subtotal de los ítems.
+ */
+export async function topProducts(
+  tenantId: string,
+  params: { from?: string; to?: string; limit?: number } = {},
+): Promise<TopProduct[]> {
+  // Defaults: día en curso y top 10 (máximo 100).
+  const from = params.from ?? new Date(new Date().setHours(0, 0, 0, 0)).toISOString()
+  const to = params.to ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+  const limit = Math.min(Math.max(params.limit ?? 10, 1), 100)
+
+  const { rows } = await db.query<TopProduct>(
+    `SELECT si.product_id,
+            si.product_name,
+            COALESCE(SUM(si.base_quantity), 0) AS units,
+            COUNT(DISTINCT si.sale_id) AS tickets,
+            COALESCE(SUM(si.subtotal), 0) AS revenue
+     FROM sale_items si
+     JOIN sales s ON s.id = si.sale_id AND s.tenant_id = $1
+     WHERE si.tenant_id = $1 AND s.status = 'COMPLETED'
+       AND s.created_at >= $2 AND s.created_at < $3
+     GROUP BY si.product_id, si.product_name
+     ORDER BY revenue DESC
+     LIMIT $4`,
+    [tenantId, from, to, limit],
+  )
+
+  // SQLite/PG pueden devolver agregados como string; se normalizan a número.
+  return rows.map((r) => ({
+    ...r,
+    units: Number(r.units),
+    tickets: Number(r.tickets),
+    revenue: round2(Number(r.revenue)),
+  }))
 }

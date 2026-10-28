@@ -78,6 +78,7 @@ export interface AuthTenantInfo {
   address: string | null
   phone: string | null
   receipt_footer: string | null
+  logo_url: string | null
 }
 
 export interface AuthDeviceInfo {

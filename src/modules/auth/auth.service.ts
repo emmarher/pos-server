@@ -466,8 +466,9 @@ async function loadTenantInfo(tenantId: string): Promise<{
     business_address: string | null
     business_phone: string | null
     ticket_footer: string | null
+    logo_url: string | null
   }>(
-    `SELECT ts.business_name, ts.business_address, ts.business_phone, ts.ticket_footer
+    `SELECT ts.business_name, ts.business_address, ts.business_phone, ts.ticket_footer, ts.logo_url
      FROM tenant_settings ts WHERE ts.tenant_id = $1`,
     [tenantId],
   )
@@ -480,6 +481,7 @@ async function loadTenantInfo(tenantId: string): Promise<{
       address: row?.business_address ?? null,
       phone: row?.business_phone ?? null,
       receipt_footer: row?.ticket_footer ?? null,
+      logo_url: row?.logo_url ?? null,
     },
   }
 }

@@ -85,7 +85,8 @@ const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp'])
  */
 const TENANT_ID = String.raw`(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`
 const FILE_UUID = String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
-const IMAGE_KEY_RE = new RegExp(`^${TENANT_ID}/prod_${FILE_UUID}\\.webp$`)
+// prod_* = imágenes de producto; logo_* = logo del comercio (mismo proxy)
+const IMAGE_KEY_RE = new RegExp(`^${TENANT_ID}/(?:prod|logo)_${FILE_UUID}\\.webp$`)
 
 /** `data` de la respuesta de subir/quitar imagen. */
 const productImageStateSchema = {
@@ -434,7 +435,7 @@ export function productsRoutes(app: FastifyInstance): void {
       fileName: string
     }
 
-    // Solo keys de imagen de producto válidas; cualquier otra cosa → 404
+    // Solo keys de imagen (producto o logo) válidas; cualquier otra cosa → 404
     const key = `${tenantId}/${fileName}`
     if (!IMAGE_KEY_RE.test(key)) {
       return reply.code(404).send(errorEnvelope('Imagen no encontrada', 404))

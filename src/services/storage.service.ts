@@ -119,6 +119,36 @@ export async function uploadProductImage(
 }
 
 /**
+ * Optimiza y sube el logo del comercio (máx 512×512, WebP q85).
+ * Key multi-tenant `{tenant_id}/logo_{uuid}.webp`, servida por el mismo
+ * proxy /images. El caller guarda la ruta en tenant_settings.logo_url.
+ */
+export async function uploadMerchantLogo(
+  tenantId: string,
+  buffer: Buffer,
+): Promise<UploadedImage> {
+  const optimized = await sharp(buffer)
+    .rotate()
+    .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+    .toFormat('webp', { quality: 85 })
+    .toBuffer()
+
+  const key = `${tenantId}/logo_${randomUUID()}.webp`
+
+  await getS3Client().send(
+    new PutObjectCommand({
+      Bucket: env.s3Bucket,
+      Key: key,
+      Body: optimized,
+      ContentType: 'image/webp',
+      CacheControl: 'public, max-age=31536000, immutable',
+    }),
+  )
+
+  return { key, url: `/images/${key}` }
+}
+
+/**
  * Borra un objeto del bucket por su key completa.
  * Errores de "NoSuchKey" se toleran (el objeto ya no existe → OK).
  */

@@ -12,7 +12,7 @@ import type { FastifyInstance } from 'fastify'
 import type { FastifyRequest } from 'fastify'
 import { authenticate, requirePermission } from '../../middleware/auth.js'
 import { okEnvelope, okEnvelopeSchema, type ApiDataSchema } from '../../types/response.js'
-import { quickStats, salesHistory } from './reports.service.js'
+import { quickStats, salesHistory, topProducts } from './reports.service.js'
 
 type AuthedRequest = FastifyRequest & { user: { tenant_id: string; sub: string } }
 
@@ -41,6 +41,22 @@ const salesHistorySchema: ApiDataSchema = {
   properties: {
     items: { type: 'array', items: saleHistoryItemSchema },
     total: { type: 'integer' },
+  },
+}
+
+/** Schema del data de /reports/top-products. */
+const topProductsSchema: ApiDataSchema = {
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      product_id: { type: 'string' },
+      product_name: { type: 'string' },
+      units: { type: 'number' },
+      tickets: { type: 'integer' },
+      revenue: { type: 'number' },
+    },
   },
 }
 
@@ -107,6 +123,31 @@ export function reportsRoutes(app: FastifyInstance): void {
     async (request: AuthedRequest) => {
       const stats = await quickStats(request.user.tenant_id)
       return okEnvelope(stats, 'Estadísticas rápidas', 200)
+    },
+  )
+
+  /* ── GET /reports/top-products ────────────────────────────────────── */
+  app.get(
+    '/reports/top-products',
+    {
+      preHandler: [authenticate, requirePermission('reports:read')],
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            from: { type: 'string' },
+            to: { type: 'string' },
+            limit: { type: 'integer', minimum: 1, maximum: 100 },
+          },
+        },
+        response: { 200: okEnvelopeSchema(topProductsSchema) },
+      },
+    },
+    async (request: AuthedRequest) => {
+      const q = request.query as { from?: string; to?: string; limit?: number }
+      const products = await topProducts(request.user.tenant_id, q)
+      return okEnvelope(products, 'Productos más vendidos', 200)
     },
   )
 
