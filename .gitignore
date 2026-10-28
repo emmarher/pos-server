@@ -42,3 +42,6 @@ installer/stage/
 installer/output/
 installer/windows/node/
 *.exe
+
+# Configuracion de agentes (no versionar)
+.commandcode/

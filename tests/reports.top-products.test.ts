@@ -146,25 +146,41 @@ describe('GET /reports/top-products', () => {
 
   it('3) no mezcla datos de otros tenants', async () => {
     const other = await createTenantFixture(app, 'TOP-B-0001')
-    const otherProduct = await db.query<ProductRow>(
-      `SELECT id, name, base_unit_id, sale_unit_id FROM products WHERE tenant_id = $1 LIMIT 1`,
-      [other.tenantId],
+    // Tercer producto sembrado: solo se vende en el tenant B.
+    const third = await db.query<ProductRow>(
+      `SELECT id, name, base_unit_id, sale_unit_id
+       FROM products WHERE tenant_id = $1 AND is_active = 1
+       ORDER BY name LIMIT 1 OFFSET 2`,
+      [session.tenantId],
     )
-    if (otherProduct.rows[0]) {
-      const now = new Date().toISOString()
-      const sale = await insertSale(other.tenantId, other.userId, 1, now)
-      await insertSaleItem(other.tenantId, sale, otherProduct.rows[0], 9, 99, now)
-    }
+    const otherProduct = third.rows[0]!
+    const now = new Date().toISOString()
+    const otherSale = await insertSale(other.tenantId, other.userId, 1, now)
+    await insertSaleItem(other.tenantId, otherSale, otherProduct, 9, 99, now)
 
-    const res = await app.inject({
+    // A no ve el producto que solo se vendió en B
+    const resA = await app.inject({
       method: 'GET',
       url: '/reports/top-products?limit=100',
       headers: { authorization: `Bearer ${session.token}` },
     })
-    expect(res.statusCode).toBe(200)
+    expect(resA.statusCode).toBe(200)
     expect(
-      (res.json().data as { product_id: string }[]).every(
-        (i) => i.product_id !== otherProduct.rows[0]?.id,
+      (resA.json().data as { product_id: string }[]).some(
+        (i) => i.product_id === otherProduct.id,
+      ),
+    ).toBe(false)
+
+    // B sí lo ve (el dato existe; el filtro tenant_id es el que lo oculta a A)
+    const resB = await app.inject({
+      method: 'GET',
+      url: '/reports/top-products?limit=100',
+      headers: { authorization: `Bearer ${other.token}` },
+    })
+    expect(resB.statusCode).toBe(200)
+    expect(
+      (resB.json().data as { product_id: string }[]).some(
+        (i) => i.product_id === otherProduct.id,
       ),
     ).toBe(true)
   })

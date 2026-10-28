@@ -75,8 +75,13 @@ interface SettingsRow {
 export async function getTenantSettings(tenantId: string): Promise<TenantSettingsView> {
   const { rows } = await db.query<SettingsRow>(
     `SELECT ts.business_name, ts.business_address, ts.business_phone, ts.business_email,
-            ts.business_rfc, ts.tax_rate, ts.currency, ts.ticket_header, ts.ticket_footer,
-            ts.logo_url, ts.timezone,
+            ts.business_rfc,
+            COALESCE(ts.tax_rate, 16) AS tax_rate,
+            COALESCE(ts.currency, 'MXN') AS currency,
+            COALESCE(ts.ticket_header, '') AS ticket_header,
+            ts.ticket_footer,
+            ts.logo_url,
+            COALESCE(ts.timezone, 'America/Mexico_City') AS timezone,
             t.name AS tenant_name,
             ls.customer AS license_customer
      FROM tenants t
