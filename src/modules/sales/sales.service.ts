@@ -551,8 +551,12 @@ export async function createSale(
     }
 
     /* 9) INSERT stored_tickets (ESC_POS de texto para reimpresión) */
+    // Encabezado: licencia (D1) → business_name → nombre del tenant.
+    const header = await loadTicketHeader(tx, tenant_id)
     const ticket = buildEscPosTicket({
-      businessName: (await loadBusinessName(tx, tenant_id)) ?? 'POS',
+      businessName: header.businessName,
+      businessAddress: header.businessAddress,
+      businessPhone: header.businessPhone,
       folio: sale.folio_display,
       createdAt: sale.created_at,
       items: resolved,
@@ -634,13 +638,30 @@ function isSqliteBusy(err: unknown): boolean {
   return code === 'SQLITE_BUSY' || msg.includes('database is locked') || msg.includes('database table is locked')
 }
 
-/** Nombre comercial para el ticket (tenant_settings.business_name). */
-async function loadBusinessName(tx: typeof db, tenantId: string): Promise<string | null> {
-  const { rows } = await tx.query<{ business_name: string | null }>(
-    'SELECT business_name FROM tenant_settings WHERE tenant_id = $1',
+/** Encabezado del ticket: nombre de licencia y datos de contacto. */
+export async function loadTicketHeader(
+  tx: typeof db,
+  tenantId: string,
+): Promise<{ businessName: string; businessAddress: string | null; businessPhone: string | null }> {
+  const { rows } = await tx.query<{
+    business_name: string | null
+    business_address: string | null
+    business_phone: string | null
+  }>(
+    `SELECT COALESCE(ls.customer, ts.business_name, t.name, 'POS') AS business_name,
+            ts.business_address, ts.business_phone
+     FROM tenants t
+     LEFT JOIN tenant_settings ts ON ts.tenant_id = t.id
+     LEFT JOIN license_state ls ON ls.tenant_id = t.id
+     WHERE t.id = $1`,
     [tenantId],
   )
-  return rows[0]?.business_name ?? null
+  const row = rows[0]
+  return {
+    businessName: row?.business_name ?? 'POS',
+    businessAddress: row?.business_address ?? null,
+    businessPhone: row?.business_phone ?? null,
+  }
 }
 
 /* ── GET /sales/:id ───────────────────────────────────────────────────── */
@@ -923,6 +944,8 @@ export async function listSales(
 
 interface TicketInput {
   businessName: string
+  businessAddress?: string | null
+  businessPhone?: string | null
   folio: string
   createdAt: string
   items: Array<{
@@ -950,6 +973,8 @@ interface TicketInput {
 function buildEscPosTicket(input: TicketInput): string {
   const lines: string[] = []
   lines.push(input.businessName.toUpperCase())
+  if (input.businessAddress) lines.push(input.businessAddress)
+  if (input.businessPhone) lines.push(`Tel: ${input.businessPhone}`)
   lines.push(`FOLIO: ${input.folio}`)
   lines.push(new Date(input.createdAt).toLocaleString('es-MX'))
   lines.push('------------------------------')
