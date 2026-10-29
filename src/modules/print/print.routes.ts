@@ -9,13 +9,14 @@
 import type { FastifyInstance } from 'fastify'
 import type { FastifyRequest } from 'fastify'
 import { authenticate, requirePermission } from '../../middleware/auth.js'
-import { okEnvelope, okEnvelopeSchema, type ApiDataSchema } from '../../types/response.js'
+import { errorEnvelope, okEnvelope, okEnvelopeSchema, type ApiDataSchema } from '../../types/response.js'
 import {
   enqueuePrint,
   listPendingPrints,
   updatePrintStatus,
   type PrintJobRow,
 } from './print.service.js'
+import { subscribePrintJobs } from './print-events.js'
 
 type AuthedRequest = FastifyRequest & { user: { tenant_id: string; sub: string } }
 
@@ -77,6 +78,68 @@ export function printRoutes(app: FastifyInstance): void {
       }
       const job = await enqueuePrint(request.user.tenant_id, request.user.sub, body)
       return okEnvelope(job, 'Trabajo de impresión encolado', 200)
+    },
+  )
+
+  /* ── GET /print-jobs/stream — SSE (push en tiempo real) ───────────── */
+  app.get(
+    '/print-jobs/stream',
+    {
+      preHandler: [authenticate, requirePermission('print:delegate')],
+      schema: {
+        querystring: {
+          type: 'object',
+          required: ['target_device_id'],
+          additionalProperties: false,
+          properties: { target_device_id: { type: 'string', minLength: 1 } },
+        },
+      },
+    },
+    async (request: AuthedRequest, reply) => {
+      const { target_device_id: targetDeviceId } = request.query as {
+        target_device_id: string
+      }
+      if (!targetDeviceId) {
+        return reply.code(400).send(errorEnvelope('target_device_id requerido', 400))
+      }
+
+      // Respuesta cruda: el stream queda abierto hasta que el cliente corte.
+      reply.hijack()
+      const raw = reply.raw
+      raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        // Evita buffering en proxies intermedios.
+        'X-Accel-Buffering': 'no',
+      })
+
+      const send = (event: string, data: unknown) => {
+        raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      }
+
+      // Recuperación: jobs pendientes antes de conectar.
+      const pending = await listPendingPrints(
+        request.user.tenant_id,
+        targetDeviceId,
+        'PENDING',
+      )
+      send('ready', { pending: pending.length })
+      for (const job of pending) send('job', job)
+
+      const unsubscribe = subscribePrintJobs(
+        request.user.tenant_id,
+        targetDeviceId,
+        job => send('job', job),
+      )
+      // Latido para mantener viva la conexión y detectar cortes.
+      const heartbeat = setInterval(() => raw.write(': ping\n\n'), 15000)
+
+      request.raw.on('close', () => {
+        clearInterval(heartbeat)
+        unsubscribe()
+        raw.end()
+      })
     },
   )
 

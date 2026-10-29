@@ -49,7 +49,7 @@ export async function login(
     token: body.data.access_token as string,
     tenantId: body.data.tenant.id as string,
     userId: body.data.user.id as string,
-    deviceId: body.data.device.id as string,
+    deviceId: body.data.device.device_id as string,
   }
 }
 

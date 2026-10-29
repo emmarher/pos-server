@@ -10,6 +10,7 @@
 
 import { db } from '../../database/client.js'
 import { HttpError } from '../../types/errors.js'
+import { emitPrintJob } from './print-events.js'
 
 /** Tipo de trabajo de impresión (RF-IM). */
 export type PrintJobType = 'SALE_TICKET' | 'CUT_TICKET' | 'TEST' | 'Z_REPORT'
@@ -90,6 +91,8 @@ export async function enqueuePrint(
    )
   const job = rows[0]
   if (!job) throw new HttpError('INTERNAL', 'No se pudo encolar la impresión')
+  // Empuja el job al dispositivo suscrito por SSE (si está conectado).
+  emitPrintJob(job)
   return job
 }
 
@@ -136,10 +139,15 @@ export async function updatePrintStatus(
       [tenantId, id, status, now],
     )
   } else if (status === 'PRINTING') {
-    await db.query(
-      `UPDATE print_jobs SET status = $3, updated_at = $4 WHERE tenant_id = $1 AND id = $2`,
-      [tenantId, id, status, now],
+    // Claim atómico: solo el primer dispositivo que vea PENDING lo toma.
+    const { rowCount } = await db.query(
+      `UPDATE print_jobs SET status = 'PRINTING', updated_at = $3
+       WHERE tenant_id = $1 AND id = $2 AND status = 'PENDING'`,
+      [tenantId, id, now],
     )
+    if (!rowCount) {
+      throw new HttpError('CONFLICT', 'El trabajo ya fue reclamado por otro dispositivo')
+    }
   } else {
     // FAILED → incrementar retry_count; si se agota el máximo, se mantiene FAILED
     const newRetry = job.retry_count + 1
