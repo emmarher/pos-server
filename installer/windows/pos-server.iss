@@ -18,7 +18,7 @@
 ; Mantener AppVersion sincronizada con pos-server/package.json "version".
 
 #define AppName "POS Server"
-#define AppVersion "0.2.18"
+#define AppVersion "0.2.19"
 #define AppPublisher "POS"
 #define DataDir "{commonappdata}\\POS Server\\data"
 
