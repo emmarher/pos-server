@@ -14,7 +14,10 @@
   Uso: stop-server.bat  (o este .ps1 directo). PowerShell 5.1 compatible.
 #>
 [CmdletBinding()]
-param([string]$AppDir = '')
+param(
+  [string]$AppDir = '',
+  [switch]$KeepRustfs
+)
 
 $ErrorActionPreference = 'Continue'
 
@@ -60,24 +63,37 @@ $targets = @($pids | Sort-Object -Unique | Where-Object { $_ -and $_ -ne $PID })
 
 if ($targets.Count -eq 0) {
   Write-Output "No se encontro el proceso del POS Server (puerto $port)."
-  exit 0
-}
+} else {
+  $killed = 0
+  foreach ($targetPid in $targets) {
+    try {
+      Stop-Process -Id $targetPid -Force -ErrorAction Stop
+      Write-Output "Detenido PID $targetPid"
+      $killed++
+    } catch {
+      Write-Output "No se pudo detener PID $targetPid : $($_.Exception.Message)"
+      Write-Output "  (ejecuta como Administrador: el server corre elevado)"
+    }
+  }
 
-$killed = 0
-foreach ($targetPid in $targets) {
-  try {
-    Stop-Process -Id $targetPid -Force -ErrorAction Stop
-    Write-Output "Detenido PID $targetPid"
-    $killed++
-  } catch {
-    Write-Output "No se pudo detener PID $targetPid : $($_.Exception.Message)"
-    Write-Output "  (ejecuta como Administrador: el server corre elevado)"
+  if ($killed -gt 0) {
+    Write-Output "POS Server detenido ($killed proceso(s))."
+  } else {
+    Write-Output "No se detuvo ningun proceso. Reintenta como Administrador."
   }
 }
 
-if ($killed -gt 0) {
-  Write-Output "POS Server detenido ($killed proceso(s))."
-} else {
-  Write-Output "No se detuvo ningun proceso. Reintenta como Administrador."
+# RustFS va despues del POS Server (orden inverso al arranque).
+# -KeepRustfs lo usa el reinicio orquestado, que lo detiene/arranca aparte.
+if (-not $KeepRustfs) {
+  $serviceScript = Join-Path (Join-Path $AppDir 'bin') 'rustfs-service.ps1'
+  if (Test-Path -LiteralPath $serviceScript) {
+    Write-Output 'Deteniendo RustFS...'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $serviceScript -Action Stop
+    if ($LASTEXITCODE -ne 0) {
+      Write-Output "Aviso: RustFS no se detuvo limpiamente (codigo $LASTEXITCODE)."
+    }
+  }
 }
+
 exit 0

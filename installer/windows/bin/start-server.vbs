@@ -11,6 +11,13 @@ appDir = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName)
 logDir = shell.ExpandEnvironmentStrings("%ProgramData%") & "\POS Server\logs"
 If Not fso.FolderExists(logDir) Then fso.CreateFolder(logDir)
 logFile = logDir & "\server-" & Year(Date) & Right("0" & Month(Date), 2) & Right("0" & Day(Date), 2) & ".log"
+' Preflight RustFS: asegura la tarea POSRustFS y espera :3900 (max 60 s).
+' Si falla, se ignora y el POS arranca igual (la venta no depende de imagenes).
+' OJO VBScript: al invocar un metodo sin asignar su valor NO se usan parentesis
+' (error 800A0414 "Cannot use parentheses when calling a Sub").
+On Error Resume Next
+shell.Run """" & appDir & "\bin\rustfs-start.bat""", 0, True
+On Error GoTo 0
 ' /s: hace determinista el manejo de comillas de cmd (sin /s, el patrón
 ' cmd /c "…" con comillas anidadas puede destrozar el comando y no arrancar nada).
 cmd = "cmd /s /c """"" & appDir & "\node\node.exe"" """ & appDir & "\dist\server.js"" >> """ & logFile & """ 2>&1"""

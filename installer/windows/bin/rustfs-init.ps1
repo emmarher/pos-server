@@ -1,36 +1,45 @@
 <#
-  installer/windows/bin/rustfs-init.ps1 — Bootstrap idempotente de RustFS en sucursal.
+  installer/windows/bin/rustfs-init.ps1 - Bootstrap idempotente de RustFS.
 
-  Qué hace (seguro re-ejecutar, drop-in de garage-init):
-    1. Si existe rustfs/docker-compose.yml → levanta contenedor (docker compose up -d) y espera :3900.
-       Si no, asume binario nativo rustfs.exe --service (prod) ya instalado; solo verifica :3900.
-    2. Genera o reutiliza credenciales S3 (S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY) — 32 hex.
-    3. Escribe/refresca S3_* + IMAGES_ENABLED=true en el .env del server.
-       S3_REGION mantiene 'garage' por compat (RustFS acepta cualquier).
-       El bucket 'pos-images' lo crea el server al arrancar (ensureImagesBucket).
+  Produccion (binario nativo rustfs.exe presente):
+    1. Si la tarea POSRustFS no existe, la instala (rustfs-service.ps1 -Install).
+       Si existe, la arranca (-Start).
+    2. Espera http://127.0.0.1:3900 y falla con codigo != 0 si no responde.
+    3. rustfs-service escribe S3_* + IMAGES_ENABLED=true en el .env del server.
 
-  Uso: rustfs-init.bat (o) powershell -NoProfile -ExecutionPolicy Bypass -File rustfs-init.ps1
-  No requiere Docker si el binario nativo está presente. No toca Program Files fuera de {app}.
+  Desarrollo (sin binario, con docker-compose.yml):
+    1. Genera/reutiliza credenciales S3 y las escribe en el .env del server
+       y en rustfs/.env.
+    2. Levanta el contenedor con docker compose y espera :3900.
 
-  NOTA PowerShell 5.1: sintaxis compatible (sin ?? ni ternarios).
+  Uso: rustfs-init.bat (admin) o powershell -File rustfs-init.ps1
+  PowerShell 5.1 compatible (sin ?? ni ternarios).
 #>
 [CmdletBinding()]
 param(
-  [string]$AppDir = (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+  [string]$AppDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
-$RustfsDir = Join-Path $AppDir 'rustfs'
-$ServerEnv = Join-Path $AppDir '.env'
-$Bucket = 'pos-images'
+# OJO: $PSCommandPath esta vacio al evaluarse en un valor por defecto de
+# param() en PowerShell 5.1 -> "Cannot bind argument to parameter 'Path'".
+# Por eso se calcula aqui, en el cuerpo.
+if ([string]::IsNullOrWhiteSpace($AppDir)) {
+  $AppDir = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+}
+
+$RustfsDir     = Join-Path $AppDir 'rustfs'
+$RustfsExe     = Join-Path $RustfsDir 'rustfs.exe'
+$ServerEnv     = Join-Path $AppDir '.env'
+$ServiceScript = Join-Path (Join-Path $AppDir 'bin') 'rustfs-service.ps1'
+$Bucket        = 'pos-images'
+$Port          = 3900
 
 function Set-DotEnvVar($Path, $Name, $Value) {
   $lines = @()
   if (Test-Path -LiteralPath $Path) { $lines = @(Get-Content -LiteralPath $Path) }
   $found = $false
-  # OJO: foreach de un solo elemento devuelve escalar String (no array) y el
-  # += concatenaría ("A=1B=2"). El @() fuerza array siempre.
   $updated = @(foreach ($line in $lines) {
     if ($line -match "^$Name=") { $found = $true; "$Name=$Value" } else { $line }
   })
@@ -38,72 +47,83 @@ function Set-DotEnvVar($Path, $Name, $Value) {
   Set-Content -LiteralPath $Path -Value $updated -Encoding Ascii
 }
 
-function Gen-HexSecret($NodeExe) {
-  $tmp = Join-Path $env:TEMP "rustfs-secret.txt"
-  & cmd.exe /c "`"$NodeExe`" -e `"console.log(require('crypto').randomBytes(16).toString('hex'))`" > `"$tmp`"" | Out-Null
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tmp)) { throw "No se pudo generar secreto con $NodeExe" }
-  $val = (Get-Content -LiteralPath $tmp -TotalCount 1).Trim()
-  Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-  if ($val.Length -ne 32) { throw "Secreto inválido: $val" }
-  return $val
+function Get-EnvValue($Name) {
+  if (-not (Test-Path -LiteralPath $ServerEnv)) { return '' }
+  $m = Select-String -LiteralPath $ServerEnv -Pattern "^$Name=(.+)$" | Select-Object -First 1
+  if (-not $m) { return '' }
+  return $m.Matches[0].Groups[1].Value.Trim().Trim('"')
 }
 
-# 0) Resolver node portable para generar secretos
-$NodeExe = Join-Path $AppDir 'node\node.exe'
-if (-not (Test-Path -LiteralPath $NodeExe)) { $NodeExe = 'node' }
+function New-HexSecret($bytes) {
+  $rng = New-Object Security.Cryptography.RNGCryptoServiceProvider
+  $buf = New-Object byte[] $bytes
+  $rng.GetBytes($buf)
+  $rng.Dispose()
+  return ([BitConverter]::ToString($buf)).Replace('-', '').ToLower()
+}
 
-# 1) RustFS arriba: preferir tarea-servicio nativa (prod) sobre compose (dev).
-# Si existe la tarea POSRustFS, asegurar que corre y OMITIR compose (mismo :3900).
-$taskExists = $false
-try { & schtasks /query /TN 'POSRustFS' 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { $taskExists = $true } } catch {}
-if ($taskExists) {
-  Write-Output '[rustfs-init] tarea POSRustFS detectada (binario nativo): asegurando arranque, sin compose.'
-  & schtasks /run /TN 'POSRustFS' 2>$null | Out-Null
-} else {
+function Wait-S3Api($seconds) {
+  $deadline = (Get-Date).AddSeconds($seconds)
+  while ((Get-Date) -lt $deadline) {
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/" -TimeoutSec 2 -ErrorAction Stop | Out-Null
+      return $true
+    } catch {
+      if ($_.Exception.Response) {
+        $code = [int]$_.Exception.Response.StatusCode
+        if ($code -eq 400 -or $code -eq 403 -or $code -eq 404) { return $true }
+      }
+      Start-Sleep -Seconds 1
+    }
+  }
+  return $false
+}
+
+if (-not (Test-Path -LiteralPath $ServerEnv)) {
+  throw "No existe $ServerEnv (instala el server primero)."
+}
+
+# -- Produccion: binario nativo + tarea POSRustFS ---------------------------
+if (Test-Path -LiteralPath $RustfsExe) {
+  if (-not (Test-Path -LiteralPath $ServiceScript)) {
+    throw "No existe $ServiceScript (reinstala POS Server)."
+  }
+
+  $task = Get-ScheduledTask -TaskName 'POSRustFS' -ErrorAction SilentlyContinue
+  $taskExists = ($null -ne $task)
+
+  if ($taskExists) {
+    Write-Output '[rustfs-init] binario nativo detectado: arrancando tarea POSRustFS.'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ServiceScript -Action Start 2>&1
+  } else {
+    Write-Output '[rustfs-init] binario nativo detectado y tarea ausente: instalando POSRustFS.'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ServiceScript -Action Install 2>&1
+  }
+  if ($LASTEXITCODE -ne 0) {
+    throw "rustfs-service fallo (codigo $LASTEXITCODE). Revisa $env:ProgramData\POS Server\logs\rustfs.log"
+  }
+
+  if (-not (Wait-S3Api 60)) {
+    throw "La API S3 http://127.0.0.1:$Port no responde. Revisa $env:ProgramData\POS Server\logs\rustfs.log"
+  }
+  Write-Output '[rustfs-init] API S3 :3900 lista. Reinicia el POS Server si ya estaba corriendo.'
+  exit 0
+}
+
+# -- Desarrollo: Docker compose ---------------------------------------------
 $composeFile = Join-Path $RustfsDir 'docker-compose.yml'
-$hasCompose = Test-Path -LiteralPath $composeFile
-$hasBinary = Test-Path -LiteralPath (Join-Path $RustfsDir 'rustfs.exe')
-
-if ($hasCompose) {
-  try { & docker --version 2>$null | Out-Null } catch { Write-Output '[rustfs-init] Docker no disponible, omitiendo compose up (prod binario).'; $hasCompose = $false }
-  if ($hasCompose -and $LASTEXITCODE -eq 0) {
-    Write-Output '[rustfs-init] levantando contenedor RustFS...'
-    & docker compose -f $composeFile up -d | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Warning '[rustfs-init] docker compose up -d falló (continuando, el binario o ensureImagesBucket lo creará)' }
-  }
-} # fin if ($hasCompose)
-} # fin else (sin tarea-servicio): vía compose/dev
-
-# Espera API :3900 (best-effort, no aborta si aún no está — ensureImagesBucket reintenta)
-$ready = $false
-for ($i = 0; $i -lt 15; $i++) {
-  try {
-    $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3900/' -TimeoutSec 3 -ErrorAction Stop
-    $ready = $true; break
-  } catch {
-    $code = -1
-    if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
-    if ($code -eq 403 -or $code -eq 404 -or $code -eq 400) { $ready = $true; break }
-    Start-Sleep -Seconds 2
-  }
+if (-not (Test-Path -LiteralPath $composeFile)) {
+  throw "No hay rustfs.exe ni docker-compose.yml en $RustfsDir. Reinstala POS Server."
 }
-if ($ready) { Write-Output '[rustfs-init] API S3 :3900 lista.' } else { Write-Output '[rustfs-init] API :3900 aún no responde (el server la creará al arrancar).' }
 
-# 2) Credenciales: reutilizar si existen en .env, si no generar
-if (-not (Test-Path -LiteralPath $ServerEnv)) { throw "No existe $ServerEnv (instala el server primero)" }
-$existing = Get-Content -LiteralPath $ServerEnv -Raw
-$keyId = $null; $secret = $null
-if ($existing -match 'S3_ACCESS_KEY_ID=(\S+)') { $keyId = $Matches[1].Trim() }
-if ($existing -match 'S3_SECRET_ACCESS_KEY=(\S+)') { $secret = $Matches[1].Trim() }
-# Filtrar placeholders vacíos
-if ([string]::IsNullOrWhiteSpace($keyId) -or $keyId -eq '""' -or $keyId.Length -lt 8) { $keyId = $null }
-if ([string]::IsNullOrWhiteSpace($secret) -or $secret -eq '""' -or $secret.Length -lt 8) { $secret = $null }
+$keyId = Get-EnvValue 'S3_ACCESS_KEY_ID'
+$secret = Get-EnvValue 'S3_SECRET_ACCESS_KEY'
+if ($keyId -eq '' -or $keyId.Length -lt 8) { $keyId = New-HexSecret 16; Write-Output '[rustfs-init] access key generada.' }
+else { Write-Output '[rustfs-init] access key reutilizada.' }
+if ($secret -eq '' -or $secret.Length -lt 8) { $secret = New-HexSecret 16; Write-Output '[rustfs-init] secret key generado.' }
+else { Write-Output '[rustfs-init] secret key reutilizado.' }
 
-if (-not $keyId) { $keyId = Gen-HexSecret $NodeExe; Write-Output "[rustfs-init] key generada: $keyId" } else { Write-Output "[rustfs-init] key reutilizada: $keyId" }
-if (-not $secret) { $secret = Gen-HexSecret $NodeExe; Write-Output '[rustfs-init] secret generado.' } else { Write-Output '[rustfs-init] secret reutilizado.' }
-
-# 3) .env del server (idempotente)
-Set-DotEnvVar $ServerEnv 'S3_ENDPOINT' 'http://127.0.0.1:3900'
+Set-DotEnvVar $ServerEnv 'S3_ENDPOINT' "http://127.0.0.1:$Port"
 Set-DotEnvVar $ServerEnv 'S3_REGION' 'garage'
 Set-DotEnvVar $ServerEnv 'S3_ACCESS_KEY_ID' $keyId
 Set-DotEnvVar $ServerEnv 'S3_SECRET_ACCESS_KEY' $secret
@@ -112,15 +132,18 @@ Set-DotEnvVar $ServerEnv 'S3_PUBLIC_URL' 'http://127.0.0.1:3902'
 Set-DotEnvVar $ServerEnv 'S3_MAX_FILE_SIZE_MB' '5'
 Set-DotEnvVar $ServerEnv 'IMAGES_ENABLED' 'true'
 
-# Sincronizar credenciales para RustFS (Docker .env o servicio Windows env)
-if ($hasCompose) {
-  # Escribir env para compose (RUSTFS_* mapeados en docker-compose.yml)
-  $rustfsEnv = Join-Path $RustfsDir '.env'
-  Set-DotEnvVar $rustfsEnv 'S3_ACCESS_KEY_ID' $keyId
-  Set-DotEnvVar $rustfsEnv 'S3_SECRET_ACCESS_KEY' $secret
-}
-if ($hasBinary) {
-  Write-Output '[rustfs-init] binario nativo detectado — credenciales en .env del server serán usadas por el servicio.'
+$rustfsEnv = Join-Path $RustfsDir '.env'
+Set-DotEnvVar $rustfsEnv 'S3_ACCESS_KEY_ID' $keyId
+Set-DotEnvVar $rustfsEnv 'S3_SECRET_ACCESS_KEY' $secret
+
+Write-Output '[rustfs-init] levantando contenedor RustFS...'
+& docker compose -f $composeFile up -d 2>&1
+if ($LASTEXITCODE -ne 0) {
+  throw "docker compose up -d fallo (codigo $LASTEXITCODE). Verifica Docker Desktop."
 }
 
-Write-Output '[rustfs-init] listo. Reinicia el servidor para activar imágenes (bucket se crea solo).'
+if (-not (Wait-S3Api 60)) {
+  throw "La API S3 http://127.0.0.1:$Port no responde. Revisa docker compose logs rustfs."
+}
+Write-Output '[rustfs-init] API S3 :3900 lista. Reinicia el POS Server si ya estaba corriendo.'
+exit 0

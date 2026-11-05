@@ -16,4 +16,8 @@ set "DATA_DIR=%ProgramData%\POS Server\data"
 if not exist "%DATA_DIR%" mkdir "%DATA_DIR%"
 cd /d "%APP_DIR%"
 echo [%date% %time%] arranque manual >> "%LOG_FILE%"
+REM RustFS primero: si la tarea existe la arranca y espera :3900 (max 60 s).
+REM Si falla, el POS arranca igual (la venta no depende de las imagenes).
+echo [%date% %time%] preflight RustFS >> "%LOG_FILE%"
+call "%~dp0rustfs-start.bat"
 "%APP_DIR%\node\node.exe" "%APP_DIR%\dist\server.js" >> "%LOG_FILE%" 2>&1

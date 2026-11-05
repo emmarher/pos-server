@@ -1,5 +1,6 @@
 # ── Dependencias ───────────────────────────────────────────────
 node_modules/
+.opencode/
 
 # ── Build de TypeScript ─────────────────────────────────────────
 dist/

@@ -1,21 +1,28 @@
 ﻿<#
-  installer/windows/bin/rustfs-service.ps1 — RustFS nativo como tarea programada.
+  installer/windows/bin/rustfs-service.ps1 - RustFS nativo como tarea programada.
 
-  Por qué tarea y no servicio sc.exe: rustfs.exe no implementa la API de
-  servicios Windows; schtasks (integrado, sin binarios extra) arranca en boot
-  como SYSTEM con reintento, suficiente para sucursal.
+  Por que tarea y no servicio sc.exe: rustfs.exe no implementa la API de
+  servicios Windows y no hay binario envoltorio (NSSM/WinSW) en el paquete.
+  Una tarea programada arranca en boot como SYSTEM, sin dependencias extra.
 
-  Acciones: -Install | -Start | -Stop | -Uninstall
-  -Install: crea dirs, genera/reutiliza credenciales S3 en el .env del server,
-    crea la tarea POSRustFS (ONSTART, SYSTEM, restart on failure) y la arranca.
-  -Uninstall: detiene y elimina la tarea (datos en ProgramData se conservan).
-  Credenciales via args de la tarea (visibles para admins, igual que el .env).
+  Acciones: Install | Start | Stop | Restart | Status | Uninstall
+    Install   : crea dirs, reutiliza/genera credenciales S3, escribe .env,
+                crea el lanzador con reintento y la tarea POSRustFS, y arranca.
+    Start     : arranca la tarea POSRustFS y espera :3900. Si la tarea falta
+                (desinstalacion o upgrade fallido) la reinstala sola.
+    Stop      : detiene la tarea y mata cualquier rustfs/cmd huerfano.
+    Restart   : Stop + Start.
+    Status    : reporta tarea, puerto y proceso.
+    Uninstall : detiene y elimina la tarea (datos en ProgramData se conservan).
 
-  NOTA PowerShell 5.1: sintaxis compatible (sin ?? ni ternarios).
+  Credenciales: archivos access.key/secret.key en ProgramData con ACL solo
+  SYSTEM/Administradores. El .env del server recibe las mismas variables S3_*.
+
+  PowerShell 5.1 compatible (sin ?? ni ternarios). Ejecutar como administrador.
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('Install', 'Start', 'Stop', 'Uninstall')]
+  [ValidateSet('Install', 'Start', 'Stop', 'Restart', 'Status', 'Uninstall')]
   [string]$Action = 'Install',
   [string]$AppDir = ''
 )
@@ -25,23 +32,42 @@ $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($AppDir)) {
   $AppDir = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 }
-$TaskName = 'POSRustFS'
-$RustfsExe = Join-Path $AppDir 'rustfs\rustfs.exe'
-$DataDir = Join-Path $env:ProgramData 'POS Server\rustfs\data'
+
+$TaskName  = 'POSRustFS'
+$RustfsDir = Join-Path $AppDir 'rustfs'
+$RustfsExe = Join-Path $RustfsDir 'rustfs.exe'
+# OJO: RustFS 1.0.0 parte la ruta del volumen por espacios y aborta con
+# "distinct physical disks". Por eso los datos NO pueden vivir en
+# "...\POS Server\rustfs": se usa una raiz sin espacios.
+$DataRoot  = Join-Path $env:ProgramData 'POSRustFS'
+$DataDir   = Join-Path $DataRoot 'data'
+$KeyFile   = Join-Path $DataRoot 'access.key'
+$SecretFile = Join-Path $DataRoot 'secret.key'
+$RunBat    = Join-Path $RustfsDir 'run-rustfs.bat'
+$LogDir    = Join-Path $env:ProgramData 'POS Server\logs'
+$LogFile   = Join-Path $LogDir 'rustfs.log'
 $ServerEnv = Join-Path $AppDir '.env'
-$Bucket = 'pos-images'
+$Bucket    = 'pos-images'
+$Port      = 3900
 
 function Set-DotEnvVar($Path, $Name, $Value) {
   $lines = @()
   if (Test-Path -LiteralPath $Path) { $lines = @(Get-Content -LiteralPath $Path) }
   $found = $false
   # OJO: foreach de un solo elemento devuelve escalar String (no array) y el
-  # += concatenaría ("A=1B=2"). El @() fuerza array siempre.
+  # += concatenaria ("A=1B=2"). El @() fuerza array siempre.
   $updated = @(foreach ($line in $lines) {
     if ($line -match "^$Name=") { $found = $true; "$Name=$Value" } else { $line }
   })
   if (-not $found) { $updated += "$Name=$Value" }
   Set-Content -LiteralPath $Path -Value $updated -Encoding Ascii
+}
+
+function Get-EnvValue($Name) {
+  if (-not (Test-Path -LiteralPath $ServerEnv)) { return '' }
+  $m = Select-String -LiteralPath $ServerEnv -Pattern "^$Name=(.+)$" | Select-Object -First 1
+  if (-not $m) { return '' }
+  return $m.Matches[0].Groups[1].Value.Trim().Trim('"')
 }
 
 function New-HexSecret($bytes) {
@@ -52,86 +78,340 @@ function New-HexSecret($bytes) {
   return ([BitConverter]::ToString($buf)).Replace('-', '').ToLower()
 }
 
-function Get-TaskState() {
-  $out = (& schtasks /query /TN $TaskName /FO LIST 2>$null) -join "`n"
-  if ($LASTEXITCODE -ne 0) { return 'missing' }
-  if ($out -match 'Status:\s*Running') { return 'running' }
-  return 'stopped'
+function Test-Admin {
+  $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = New-Object Security.Principal.WindowsPrincipal($id)
+  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Test-Task {
+  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  return ($null -ne $task)
+}
+
+function Get-TaskState {
+  try {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    if (-not $task) { return 'missing' }
+    if ([string]$task.State -eq 'Running') { return 'running' }
+    return 'stopped'
+  } catch {
+    # Sin admin la consulta da "Access denied": no confundirlo con ausente.
+    if ("$($_.Exception.Message)" -match 'denied|denegado|Acceso') { return 'sin permisos (admin)' }
+    return 'missing'
+  }
+}
+
+function Test-Port {
+  $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+  return ($listeners.Count -gt 0)
 }
 
 function Wait-S3Api($seconds) {
   $deadline = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $deadline) {
     try {
-      Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3900/' -TimeoutSec 3 -ErrorAction Stop | Out-Null
+      Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/" -TimeoutSec 2 -ErrorAction Stop | Out-Null
       return $true
     } catch {
-      $code = -1
-      if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
-      if ($code -eq 403 -or $code -eq 404 -or $code -eq 400) { return $true }
-      Start-Sleep -Seconds 2
+      if ($_.Exception.Response) {
+        $code = [int]$_.Exception.Response.StatusCode
+        if ($code -eq 400 -or $code -eq 403 -or $code -eq 404) { return $true }
+      }
+      Start-Sleep -Seconds 1
     }
   }
   return $false
 }
 
-if ($Action -eq 'Uninstall') {
-  Write-Output '[rustfs-service] deteniendo y eliminando tarea...'
-  & schtasks /end /TN $TaskName 2>$null | Out-Null
-  & schtasks /delete /TN $TaskName /F 2>$null | Out-Null
-  Write-Output '[rustfs-service] listo (datos conservados).'
-  exit 0
+# Ultimas lineas de rustfs.log: sin esto el error solo decia "no respondio" y
+# la causa real (p. ej. ruta con espacios) quedaba invisible.
+function Get-LogTail($lineCount) {
+  if (-not (Test-Path -LiteralPath $LogFile)) { return '' }
+  try {
+    return (@(Get-Content -LiteralPath $LogFile -Tail $lineCount -ErrorAction Stop) -join "`n")
+  } catch {
+    return ''
+  }
 }
 
-if ($Action -eq 'Stop') {
-  & schtasks /end /TN $TaskName 2>$null | Out-Null
-  Write-Output '[rustfs-service] detenido.'
-  exit 0
+# Migracion unica desde la ruta vieja (con espacios). En una instalacion nueva
+# no existe y no hace nada.
+function Move-LegacyData {
+  $legacyRoot = Join-Path $env:ProgramData 'POS Server\rustfs'
+  if (-not (Test-Path -LiteralPath $legacyRoot)) { return }
+  foreach ($name in @('data', 'access.key', 'secret.key')) {
+    $src = Join-Path $legacyRoot $name
+    $dst = Join-Path $DataRoot $name
+    if (-not (Test-Path -LiteralPath $src)) { continue }
+    if (Test-Path -LiteralPath $dst) { continue }
+    try {
+      if (-not (Test-Path -LiteralPath $DataRoot)) {
+        New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
+      }
+      Move-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop
+      Write-Output "[rustfs-service] migrado: $src -> $dst"
+    } catch {
+      Write-Output ("[rustfs-service] AVISO: no se pudo migrar {0}: {1}" -f $src, $_.Exception.Message)
+    }
+  }
 }
 
-if ($Action -eq 'Start') {
-  & schtasks /run /TN $TaskName 2>$null | Out-Null
-  if (Wait-S3Api 60) { Write-Output '[rustfs-service] API S3 lista.'; exit 0 }
-  Write-Output '[rustfs-service] ERROR: :3900 no responde.'; exit 1
+function Stop-Rustfs {
+  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 300
+
+  $pids = New-Object System.Collections.Generic.List[int]
+
+  # 1) cmd del lanzador: si sobrevive, relanzaria rustfs en 5 s.
+  try {
+    Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" -ErrorAction Stop |
+      Where-Object { $_.CommandLine -and $_.CommandLine -like '*run-rustfs.bat*' } |
+      ForEach-Object { $pids.Add([int]$_.ProcessId) }
+  } catch {}
+
+  # 2) rustfs de esta instalacion. ExecutablePath puede venir vacio si corre
+  #    elevado; en ese caso se acepta el nombre (solo POS usa rustfs.exe).
+  try {
+    Get-CimInstance Win32_Process -Filter "Name='rustfs.exe'" -ErrorAction Stop |
+      Where-Object { -not $_.ExecutablePath -or $_.ExecutablePath -eq $RustfsExe } |
+      ForEach-Object { $pids.Add([int]$_.ProcessId) }
+  } catch {}
+
+  # 3) dueno del puerto 3900, solo si es rustfs (no matar Docker/WSL).
+  try {
+    Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+      ForEach-Object {
+        $owner = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
+        if ($owner -and $owner.ProcessName -eq 'rustfs') { $pids.Add([int]$_.OwningProcess) }
+      }
+  } catch {}
+
+  foreach ($procId in ($pids | Sort-Object -Unique)) {
+    if ($procId -and $procId -ne $PID) {
+      try { Stop-Process -Id $procId -Force -ErrorAction Stop } catch {}
+    }
+  }
+
+  for ($i = 0; $i -lt 10; $i++) {
+    if (-not (Test-Port)) { return }
+    Start-Sleep -Seconds 1
+  }
 }
 
-# --- Install ---
-if (-not (Test-Path -LiteralPath $RustfsExe)) { throw "No existe $RustfsExe" }
-if (-not (Test-Path -LiteralPath $ServerEnv)) { throw "No existe $ServerEnv (instala el server primero)" }
-foreach ($d in @($DataDir, (Join-Path $env:ProgramData 'POS Server\rustfs\meta'))) {
-  if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+function Start-Rustfs {
+  # Si ya esta escuchando (p. ej. arranco en boot), no hace falta tocar la tarea.
+  if (Test-Port) { return }
+  if (-not (Test-Task)) {
+    # Auto-reparacion: la tarea pudo perderse (desinstalacion, limpieza o un
+    # upgrade fallido). Reinstalarla es barato y evita mandar al usuario a
+    # ejecutar rustfs-init a mano. Install-Rustfs reutiliza claves y .env.
+    if (-not (Test-Path -LiteralPath $RustfsExe)) {
+      throw "La tarea $TaskName no existe y falta $RustfsExe. Reinstala POS Server."
+    }
+    if (-not (Test-Admin)) {
+      throw "La tarea $TaskName no existe. Ejecuta como administrador (UAC) para repararla."
+    }
+    Write-Output '[rustfs-service] tarea ausente: reinstalando (auto-reparacion).'
+    Install-Rustfs
+    return
+  }
+  try {
+    Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+  } catch {
+    # Si ya estaba arrancando/en ejecucion, igual esperamos el puerto.
+  }
+  if (Wait-S3Api 60) { return }
+  $tail = Get-LogTail 15
+  $msg = "RustFS no respondio en http://127.0.0.1:$Port (revisa $LogFile)."
+  if ($tail) { $msg += "`n--- ultimas lineas de rustfs.log ---`n$tail" }
+  throw $msg
 }
 
-# Credenciales: reutilizar del .env o generar (32 hex c/u)
-$existing = Get-Content -LiteralPath $ServerEnv -Raw
-$keyId = $null; $secret = $null
-if ($existing -match 'S3_ACCESS_KEY_ID=(\S+)') { $keyId = $Matches[1].Trim() }
-if ($existing -match 'S3_SECRET_ACCESS_KEY=(\S+)') { $secret = $Matches[1].Trim() }
-if ([string]::IsNullOrWhiteSpace($keyId) -or $keyId.Length -lt 8) { $keyId = New-HexSecret 16; Write-Output '[rustfs-service] key generada.' } else { Write-Output '[rustfs-service] key reutilizada.' }
-if ([string]::IsNullOrWhiteSpace($secret) -or $secret.Length -lt 8) { $secret = New-HexSecret 16; Write-Output '[rustfs-service] secret generado.' } else { Write-Output '[rustfs-service] secret reutilizado.' }
+function Install-Rustfs {
+  if (-not (Test-Path -LiteralPath $RustfsExe)) { throw "No existe $RustfsExe" }
+  if (-not (Test-Path -LiteralPath $ServerEnv)) { throw "No existe $ServerEnv (instala el server primero)" }
 
-Set-DotEnvVar $ServerEnv 'S3_ENDPOINT' 'http://127.0.0.1:3900'
-Set-DotEnvVar $ServerEnv 'S3_REGION' 'garage'
-Set-DotEnvVar $ServerEnv 'S3_ACCESS_KEY_ID' $keyId
-Set-DotEnvVar $ServerEnv 'S3_SECRET_ACCESS_KEY' $secret
-Set-DotEnvVar $ServerEnv 'S3_BUCKET' $Bucket
-Set-DotEnvVar $ServerEnv 'S3_PUBLIC_URL' 'http://127.0.0.1:3902'
-Set-DotEnvVar $ServerEnv 'S3_MAX_FILE_SIZE_MB' '5'
-Set-DotEnvVar $ServerEnv 'IMAGES_ENABLED' 'true'
+  Move-LegacyData
 
-# Tarea: arranque en boot como SYSTEM + reintento ante fallo.
-# schtasks limita /TR a 261 chars: la tarea ejecuta un .bat lanzador (ruta
-# corta y estable) que invoca rustfs.exe con todos los args. Secretos en el
-# .bat (solo admins, igual que el .env).
-$runBat = Join-Path (Join-Path $AppDir 'rustfs') 'run-rustfs.bat'
-$runDir = Split-Path -Parent $runBat
-if (-not (Test-Path -LiteralPath $runDir)) { New-Item -ItemType Directory -Force -Path $runDir | Out-Null }
-$batContent = "@echo off`r`n`"$RustfsExe`" server --address 127.0.0.1:3900 --access-key $keyId --secret-key $secret `"$DataDir`"`r`n"
-Set-Content -LiteralPath $runBat -Value $batContent -Encoding Ascii
-& schtasks /create /TN $TaskName /TR "`"$runBat`"" /SC ONSTART /RU SYSTEM /RL HIGHEST /F 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'No se pudo crear la tarea programada' }
-# Reintento ante fallo: 3 reintentos cada 1 min (XML directo es frágil; schtasks expone /RI y /DU solo con /SC compatibles — se configura restart via Settings con schtasks /change)
-& schtasks /change /TN $TaskName /RI 1 /DU 24:00 /K 2>$null | Out-Null
-& schtasks /run /TN $TaskName 2>$null | Out-Null
-if (Wait-S3Api 60) { Write-Output '[rustfs-service] instalado y API S3 lista.'; exit 0 }
-throw 'La tarea se creó pero :3900 no responde en 60s'
+  foreach ($d in @($DataRoot, $DataDir, $LogDir)) {
+    if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+  }
+
+  # Reutilizar credenciales del .env, de los archivos o generar 32 hex.
+  $keyId = Get-EnvValue 'S3_ACCESS_KEY_ID'
+  $secret = Get-EnvValue 'S3_SECRET_ACCESS_KEY'
+  if (($keyId -eq '' -or $keyId.Length -lt 8) -and (Test-Path -LiteralPath $KeyFile)) {
+    $keyId = ([System.IO.File]::ReadAllText($KeyFile)).Trim()
+  }
+  if (($secret -eq '' -or $secret.Length -lt 8) -and (Test-Path -LiteralPath $SecretFile)) {
+    $secret = ([System.IO.File]::ReadAllText($SecretFile)).Trim()
+  }
+  if ($keyId -eq '' -or $keyId.Length -lt 8) { $keyId = New-HexSecret 16; Write-Output '[rustfs-service] access key generada.' }
+  else { Write-Output '[rustfs-service] access key reutilizada.' }
+  if ($secret -eq '' -or $secret.Length -lt 8) { $secret = New-HexSecret 16; Write-Output '[rustfs-service] secret key generado.' }
+  else { Write-Output '[rustfs-service] secret key reutilizado.' }
+
+  # Archivos de credenciales (sin salto de linea) y ACL solo SYSTEM/Admins.
+  [System.IO.File]::WriteAllText($KeyFile, $keyId, [System.Text.Encoding]::ASCII)
+  [System.IO.File]::WriteAllText($SecretFile, $secret, [System.Text.Encoding]::ASCII)
+  & icacls.exe $KeyFile /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1 | Out-Null
+  & icacls.exe $SecretFile /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1 | Out-Null
+
+  # Variables que lee pos-server al arrancar (env.ts exige las cuatro).
+  Set-DotEnvVar $ServerEnv 'S3_ENDPOINT' "http://127.0.0.1:$Port"
+  Set-DotEnvVar $ServerEnv 'S3_REGION' 'garage'
+  Set-DotEnvVar $ServerEnv 'S3_ACCESS_KEY_ID' $keyId
+  Set-DotEnvVar $ServerEnv 'S3_SECRET_ACCESS_KEY' $secret
+  Set-DotEnvVar $ServerEnv 'S3_BUCKET' $Bucket
+  Set-DotEnvVar $ServerEnv 'S3_PUBLIC_URL' 'http://127.0.0.1:3902'
+  Set-DotEnvVar $ServerEnv 'S3_MAX_FILE_SIZE_MB' '5'
+  Set-DotEnvVar $ServerEnv 'IMAGES_ENABLED' 'true'
+  Write-Output '[rustfs-service] variables S3_* escritas en el .env del server.'
+
+  # Lanzador con reintento: si rustfs.exe cae, el bucle lo relanza en 5 s.
+  # Las credenciales van en archivos, no en la linea de comandos.
+  $batLines = @(
+    '@echo off',
+    'setlocal',
+    ':loop',
+    ('"{0}" server --address 127.0.0.1:{1} --access-key-file "{2}" --secret-key-file "{3}" "{4}" >> "{5}" 2>&1' -f $RustfsExe, $Port, $KeyFile, $SecretFile, $DataDir, $LogFile),
+    'ping -n 6 127.0.0.1 >nul',
+    'goto loop'
+  )
+  [System.IO.File]::WriteAllText($RunBat, (($batLines -join "`r`n") + "`r`n"), [System.Text.Encoding]::ASCII)
+
+  # Recrear la tarea siempre: corrige instalaciones donde nunca se creo.
+  Stop-Rustfs
+  if (Test-Port) {
+    $ownerName = 'otro proceso'
+    try {
+      $conn = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop)[0]
+      $owner = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+      if ($owner) { $ownerName = $owner.ProcessName }
+    } catch {}
+    throw "El puerto $Port sigue ocupado por $ownerName. Deten ese servicio (por ejemplo Docker) y reintenta."
+  }
+  $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c "' + $RunBat + '"')
+  $trigger = New-ScheduledTaskTrigger -AtStartup
+  $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
+  try {
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+  } catch {
+    throw "No se pudo crear la tarea POSRustFS: $($_.Exception.Message)"
+  }
+  Write-Output "[rustfs-service] tarea $TaskName creada (ONSTART, SYSTEM, sin limite de tiempo)."
+
+  try { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop } catch { }
+  if (Wait-S3Api 60) {
+    Write-Output '[rustfs-service] instalado y API S3 lista.'
+    return
+  }
+  $tail = Get-LogTail 15
+  $msg = "La tarea se creo pero http://127.0.0.1:$Port no responde. Revisa $LogFile."
+  if ($tail) { $msg += "`n--- ultimas lineas de rustfs.log ---`n$tail" }
+  throw $msg
+}
+
+function Show-Status {
+  $taskState = Get-TaskState
+  $portState = 'down'
+  if (Test-Port) { $portState = 'LISTEN' }
+
+  $imagesFlag = 'false'
+  if (Test-Path -LiteralPath $ServerEnv) {
+    $mImg = Select-String -LiteralPath $ServerEnv -Pattern '^IMAGES_ENABLED=(.+)$' | Select-Object -First 1
+    if ($mImg) { $imagesFlag = $mImg.Matches[0].Groups[1].Value.Trim() }
+  }
+
+  Write-Output "[rustfs-service] tarea ${TaskName}: $taskState"
+  Write-Output "[rustfs-service] API 127.0.0.1:${Port}: $portState"
+  Write-Output "[rustfs-service] IMAGES_ENABLED: $imagesFlag"
+  Write-Output "[rustfs-service] rustfs.exe: $(if (Test-Path -LiteralPath $RustfsExe) { 'si' } else { 'NO' })"
+  if (Test-Path -LiteralPath $LogFile) {
+    Write-Output "[rustfs-service] log: $LogFile"
+  }
+}
+
+# Crear/detener la tarea SYSTEM exige elevacion. Mejor un mensaje claro que
+# una traza de "Access is denied" a mitad de la operacion. Excepcion: en el
+# arranque de sesion (no elevado) Start solo comprueba el puerto; si ya esta
+# listo no hay nada que hacer y no debe registrar un error en cada login.
+if ($Action -ne 'Status' -and -not (Test-Admin)) {
+  if ($Action -eq 'Start' -and (Test-Port)) {
+    Write-Output '[rustfs-service] API S3 ya esta escuchando.'
+    exit 0
+  }
+  Write-Output '[rustfs-service] ERROR: se requieren permisos de administrador.'
+  exit 1
+}
+
+switch ($Action) {
+  'Uninstall' {
+    Write-Output '[rustfs-service] deteniendo y eliminando tarea...'
+    Stop-Rustfs
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Output '[rustfs-service] listo (datos conservados).'
+    exit 0
+  }
+  'Stop' {
+    Stop-Rustfs
+    Write-Output '[rustfs-service] detenido.'
+    exit 0
+  }
+  'Start' {
+    try {
+      Start-Rustfs
+      Write-Output '[rustfs-service] API S3 lista.'
+      exit 0
+    } catch {
+      Write-Output ("[rustfs-service] ERROR: {0}" -f $_.Exception.Message)
+      exit 1
+    }
+  }
+  'Restart' {
+    try {
+      Write-Output '[rustfs-service] reiniciando...'
+      Stop-Rustfs
+      Start-Rustfs
+      Write-Output '[rustfs-service] API S3 lista.'
+      exit 0
+    } catch {
+      Write-Output ("[rustfs-service] ERROR: {0}" -f $_.Exception.Message)
+      exit 1
+    }
+  }
+  'Status' {
+    Show-Status
+    exit 0
+  }
+  'Install' {
+    # Log propio: Inno ejecuta esto con "runhidden" y no ve el codigo de
+    # salida; sin este archivo un fallo de instalacion era invisible.
+    $installLog = Join-Path $LogDir 'rustfs-install.log'
+    if (-not (Test-Path -LiteralPath $LogDir)) {
+      New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    }
+    $transcript = $false
+    try {
+      Start-Transcript -LiteralPath $installLog -Force | Out-Null
+      $transcript = $true
+    } catch { }
+
+    $code = 0
+    try {
+      Install-Rustfs
+    } catch {
+      $code = 1
+      Write-Output ("[rustfs-service] ERROR: {0}" -f $_.Exception.Message)
+    } finally {
+      if ($transcript) { try { Stop-Transcript | Out-Null } catch { } }
+    }
+
+    if ($code -ne 0) {
+      Write-Output "[rustfs-service] detalle en: $installLog"
+    }
+    exit $code
+  }
+}

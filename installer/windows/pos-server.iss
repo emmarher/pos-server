@@ -18,7 +18,7 @@
 ; Mantener AppVersion sincronizada con pos-server/package.json "version".
 
 #define AppName "POS Server"
-#define AppVersion "0.2.6"
+#define AppVersion "0.2.18"
 #define AppPublisher "POS"
 #define DataDir "{commonappdata}\\POS Server\\data"
 
@@ -51,11 +51,12 @@ Source: "..\stage\node_modules\*"; DestDir: "{app}\node_modules"; Flags: ignorev
 Source: "bin\*.bat"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "bin\*.vbs"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "bin\*.ps1"; DestDir: "{app}\bin"; Flags: ignoreversion
-; RustFS (solo si el wizard activa imágenes; release copia
-; installer/windows/rustfs/* a stage/rustfs/ antes de compilar;
-; dev=Docker, prod=binario nativo rustfs.exe 1.0.0 como tarea POSRustFS)
-Source: "..\stage\rustfs\docker-compose.yml"; DestDir: "{app}\rustfs"; Flags: ignoreversion; Check: UseImages
-Source: "..\stage\rustfs\rustfs.exe"; DestDir: "{app}\rustfs"; Flags: ignoreversion; Check: UseImages
+; RustFS: el binario se copia SIEMPRE (ya viaja dentro del Setup) para que
+; "Configurar imagenes (RustFS)" pueda activarlas despues sin reinstalar.
+; Antes dependia del Check y una casilla olvidada dejaba la tarea POSRustFS
+; sin crear y sin forma de repararla desde el menu Inicio.
+Source: "..\stage\rustfs\docker-compose.yml"; DestDir: "{app}\rustfs"; Flags: ignoreversion
+Source: "..\stage\rustfs\rustfs.exe"; DestDir: "{app}\rustfs"; Flags: ignoreversion
 
 [Dirs]
 Name: "{#DataDir}"; Permissions: users-modify
@@ -72,27 +73,20 @@ Name: "{group}\Detener POS Server"; Filename: "{app}\bin\stop-server.bat"
 Name: "{group}\Salud del servidor"; Filename: "{app}\bin\healthcheck.bat"
 Name: "{group}\Diagnóstico (logs y estado)"; Filename: "{app}\bin\diagnostico.bat"
 Name: "{group}\Respaldo base de datos"; Filename: "{app}\bin\backup.bat"
-Name: "{group}\Configurar imágenes (RustFS)"; Filename: "{app}\bin\rustfs-init.bat"; Check: UseImages
+Name: "{group}\Configurar imágenes (RustFS)"; Filename: "{app}\bin\rustfs-init.bat"
 Name: "{group}\Instalar Docker + RustFS"; Filename: "{app}\bin\instalar-rustfs.bat"
-Name: "{group}\Servicio RustFS (iniciar/detener)"; Filename: "{app}\bin\rustfs-service.bat"; Check: UseImages
+Name: "{group}\Servicio RustFS (iniciar/detener)"; Filename: "{app}\bin\rustfs-service.bat"
+Name: "{group}\Reiniciar POS Server (API + RustFS)"; Filename: "{app}\bin\control-pos.bat"; Parameters: "restart"
+Name: "{group}\Estado del POS (API + RustFS)"; Filename: "{app}\bin\control-pos.bat"; Parameters: "status"
 Name: "{group}\Desinstalar POS Server"; Filename: "{uninstallexe}"
 ; Auto-arranque v1: acceso en Startup del usuario (sin ventana via .vbs)
 Name: "{userstartup}\POS Server"; Filename: "{app}\bin\start-server.vbs"
 
 [Run]
-; Migrar + seed demo + catálogo: van por Pascal (RunNodeScript) con validación
-; de exit code y log en {app}\install-db.log. Antes iban directos sin chequear
-; resultado y una DB vacía pasaba silenciosa ("no such table: tenants").
-; (Las entradas [Run] clásicas no pueden abortar ante fallo.)
-; Servicio nativo RustFS (tarea POSRustFS, auto-arranque en boot, binario 1.0.0 verificado).
-; Va ANTES de rustfs-init para que este detecte la tarea y omita compose.
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\rustfs-service.ps1"" -Action Install"; WorkingDir: "{app}\bin"; StatusMsg: "Instalando servicio RustFS..."; Flags: runhidden waituntilterminated; Check: UseImages
-; Bootstrap de imágenes (solo si el wizard las activó; rustfs-init es idempotente, con try/catch)
-Filename: "{app}\bin\rustfs-init.bat"; WorkingDir: "{app}\bin"; StatusMsg: "Configurando almacenamiento de imágenes (RustFS)..."; Flags: waituntilterminated; Check: UseImages
-; Auto-arranque inmediato: deja el server corriendo al terminar el wizard
-; (antes solo quedaba el acceso Startup → exigía cerrar sesión/entrar).
-; OJO: el .vbs NO es ejecutable directo (CreateProcess 193): va vía wscript.exe.
-Filename: "wscript.exe"; Parameters: """{app}\bin\start-server.vbs"""; StatusMsg: "Arrancando POS Server..."; Flags: nowait
+; IMPORTANTE: Inno procesa [Run] ANTES de CurStepChanged(ssPostInstall).
+; Antes RustFS y el arranque del server estaban aquí y corrían sin .env
+; (fallaban en silencio). Ahora se ejecutan desde [Code] al final, cuando
+; WriteEnvFile() y las migraciones ya terminaron.
 
 [UninstallDelete]
 Type: files; Name: "{app}\.env"
@@ -129,7 +123,9 @@ begin
     'imágenes (se puede activar después con "Configurar imágenes (RustFS)").',
     False, False);
   ImagesPage.Add('Incluir RustFS (fotos de productos)');
-  ImagesPage.Values[0] := False;
+  { Marcada por defecto: el POS se entrega con imagenes listas. Un cliente
+    que no la marque puede activarlas luego desde el menu Inicio. }
+  ImagesPage.Values[0] := True;
 
   { Licencia inicial opcional (página con selector de archivo nativo).
     Si se da, se copia a ProgramData antes del primer arranque; si se omite,
@@ -146,6 +142,21 @@ end;
 function UseImages(): Boolean;
 begin
   Result := ImagesPage.Values[0];
+end;
+
+{ True si hay que instalar/verificar RustFS: el wizard lo activó o la
+  instalación existente ya tenía IMAGES_ENABLED=true (upgrade). Sin esto,
+  un upgrade sin marcar la casilla dejaba imágenes rotas y la tarea ausente. }
+function ImagesNeeded(): Boolean;
+var
+  EnvContent: AnsiString;
+begin
+  Result := UseImages();
+  if Result then
+    Exit;
+  if FileExists(ExpandConstant('{app}\.env')) and
+     LoadStringFromFile(ExpandConstant('{app}\.env'), EnvContent) then
+    Result := Pos('IMAGES_ENABLED=true', EnvContent) > 0;
 end;
 
 { Verifica Docker Desktop (solo si imágenes en modo Docker dev). En prod con binario nativo no es requisito. }
@@ -255,7 +266,7 @@ var
   Content, RustfsData: String;
 begin
   Result := False;
-  RustfsData := ExpandConstant('{commonappdata}\POS Server\rustfs');
+  RustfsData := ExpandConstant('{commonappdata}\POSRustFS');
   StringChangeEx(RustfsData, '\', '/', True);
   Content := 'RUSTFS_DATA_DIR=' + RustfsData + '/data' + #13#10;
   Result := SaveStringToFile(ExpandConstant('{app}\rustfs\.env'), Content, False);
@@ -344,12 +355,59 @@ begin
       '', SW_HIDE, ewWaitUntilTerminated, Res);
 end;
 
+{ Detiene RustFS (tarea POSRustFS + procesos) si ya estaba instalado.
+  Necesario antes de copiar rustfs.exe: el binario en ejecución se bloquea. }
+procedure StopRustfs();
+var
+  Res: Integer;
+  Ps1: String;
+begin
+  Ps1 := ExpandConstant('{app}\bin\rustfs-service.ps1');
+  if FileExists(Ps1) then
+    Exec('powershell.exe',
+      '-NoProfile -ExecutionPolicy Bypass -File "' + Ps1 + '" -Action Stop',
+      '', SW_HIDE, ewWaitUntilTerminated, Res);
+end;
+
+{ Instala/arranca RustFS. Debe correr en ssPostInstall: [Run] se procesa
+  ANTES y el script necesita el .env, que escribe WriteEnvFile. }
+procedure InstallRustfsService();
+var
+  Res: Integer;
+begin
+  if not ImagesNeeded() then
+    Exit;
+  if not Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\bin\rustfs-service.ps1') + '" -Action Install',
+    ExpandConstant('{app}\bin'), SW_HIDE, ewWaitUntilTerminated, Res) then
+    Res := -1;
+  if Res <> 0 then
+    MsgBox('RustFS no quedo configurado (codigo ' + IntToStr(Res) + ').' + #13#10 +
+      'El POS funciona igual, pero las fotos de productos quedan desactivadas.' + #13#10 +
+      'Detalle en: ' + ExpandConstant('{commonappdata}\POS Server\logs\rustfs-install.log') + #13#10 +
+      'Puedes reintentar con "Configurar imagenes (RustFS)" del menu Inicio.', mbError, MB_OK);
+end;
+
+{ Deja el POS corriendo al terminar el wizard. Antes iba en [Run], donde aún
+  no existían ni el .env ni la base migrada. }
+procedure StartServerAfterInstall();
+var
+  Res: Integer;
+begin
+  Exec('wscript.exe', '"' + ExpandConstant('{app}\bin\start-server.vbs') + '"',
+    ExpandConstant('{app}'), SW_HIDE, ewNoWait, Res);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    { Upgrade: detener el server previo para no bloquear archivos/logs. }
+    { Upgrade: detener el server y RustFS previos.
+      rustfs.exe en ejecución bloquea el binario nuevo y deja la tarea viva.
+      stop-server.ps1 ya lo detiene en versiones nuevas, pero un upgrade desde
+      una versión vieja no lo hacía: se detiene explícitamente. }
     StopRunningServer();
+    StopRustfs();
   end;
   if CurStep = ssPostInstall then
   begin
@@ -368,12 +426,14 @@ begin
       Abort;
     if not RunNodeScript('Catálogo demo', 'seed-catalog.js') then
       Abort;
-    if UseImages() then
+    if ImagesNeeded() then
     begin
       { RustFS: Docker solo para dev; prod usa binario nativo rustfs.exe. No abortar si Docker falta — rustfs-init lo maneja. }
       if not WriteRustfsFiles() then
         Abort;
+      InstallRustfsService();
     end;
+    StartServerAfterInstall();
   end;
 end;
 
@@ -386,16 +446,16 @@ begin
   begin
     { Detener el server ANTES de borrar archivos: si no, queda node.exe vivo. }
     StopRunningServer();
+    { Detener RustFS y eliminar la tarea ANTES de que el desinstalador borre
+      bin\rustfs-service.ps1 (Inno expande las llaves de la ruta; aquí van
+      escritas sin llaves a propósito). Antes se hacía en usPostUninstall,
+      cuando el script ya no existía, y la tarea quedaba huérfana. }
+    Exec('docker', 'compose -f "' + ExpandConstant('{app}\rustfs\docker-compose.yml') + '" down', '', SW_HIDE, ewWaitUntilTerminated, Res);
+    Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\bin\rustfs-service.ps1') + '" -Action Uninstall', '', SW_HIDE, ewWaitUntilTerminated, Res);
   end;
   if CurUninstallStep = usPostUninstall then
   begin
     Exec('netsh.exe', 'advfirewall firewall delete rule name="POS Server API"', '', SW_HIDE, ewWaitUntilTerminated, Res);
     Exec('netsh.exe', 'advfirewall firewall delete rule name="POS Server Discovery"', '', SW_HIDE, ewWaitUntilTerminated, Res);
-    { Detener RustFS si se instaló (los datos en ProgramData se conservan).
-      No falla si Docker/binario ya no existe: Exec ignora el error. }
-    Exec('docker', 'compose -f "' + ExpandConstant('{app}\rustfs\docker-compose.yml') + '" down', '', SW_HIDE, ewWaitUntilTerminated, Res);
-    { Eliminar tarea-servicio POSRustFS (el binario no trae subcomando service;
-      datos en ProgramData se conservan). No falla si ya no existe. }
-    Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\bin\rustfs-service.ps1') + '" -Action Uninstall', '', SW_HIDE, ewWaitUntilTerminated, Res);
   end;
 end;

@@ -100,6 +100,19 @@ if (-not (Test-Administrator)) {
   exit 10
 }
 
+# Produccion: si el binario nativo esta presente, no hace falta Docker.
+# Configura la tarea POSRustFS y sale.
+if (Test-Path -LiteralPath (Join-Path $RustFSDir 'rustfs.exe')) {
+  Write-Step 'Binario nativo RustFS detectado: configurando tarea POSRustFS (sin Docker).'
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $AppDir 'bin\rustfs-service.ps1') -Action Install
+  if ($LASTEXITCODE -ne 0) {
+    Write-Step ("ERROR: rustfs-service fallo (codigo {0})." -f $LASTEXITCODE)
+    exit 15
+  }
+  Write-Step 'RustFS nativo listo (auto-arranque por tarea POSRustFS).'
+  exit 0
+}
+
 $phase = Get-Phase
 Write-Step "Continuando en fase: $phase"
 
