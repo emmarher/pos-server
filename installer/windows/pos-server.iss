@@ -57,6 +57,13 @@ Source: "bin\*.ps1"; DestDir: "{app}\bin"; Flags: ignoreversion
 ; sin crear y sin forma de repararla desde el menu Inicio.
 Source: "..\stage\rustfs\docker-compose.yml"; DestDir: "{app}\rustfs"; Flags: ignoreversion
 Source: "..\stage\rustfs\rustfs.exe"; DestDir: "{app}\rustfs"; Flags: ignoreversion
+; Runtime de VC++ de rustfs.exe: sin vcruntime140.dll el binario aborta al arrancar
+; ("The code execution cannot proceed because VCRUNTIME140.dll was not found")
+; y el puerto S3 :3900 nunca escucha. Al estar al lado del exe Windows la resuelve
+; sin necesitar el redistribuible instalado en el sistema. Deben viajar con
+; rustfs.exe en installer\stage\rustfs\ (validadas por build-release.ps1).
+Source: "..\stage\rustfs\vcruntime140.dll"; DestDir: "{app}\rustfs"; Flags: ignoreversion
+Source: "..\stage\rustfs\msvcp140.dll"; DestDir: "{app}\rustfs"; Flags: ignoreversion
 
 [Dirs]
 Name: "{#DataDir}"; Permissions: users-modify
