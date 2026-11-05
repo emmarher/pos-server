@@ -12,17 +12,31 @@
 export interface Customer {
   id: string
   tenant_id: string
+  /** Nombre del cliente */
   name: string
+  /** Descripción o datos adicionales */
+  description: string | null
+  /** Teléfono de contacto */
   phone: string | null
+  /** Correo electrónico */
   email: string | null
+  /** Domicilio */
   address: string | null
+  /** RFC (tax ID) */
   rfc: string | null
+  /** Límite de crédito en pesos */
   credit_limit: number
+  /** Saldo actual debito ( negativo en customer_credits ) */
   current_balance: number
+  /** Puntos de lealtad */
   loyalty_points: number
+  /** Valor unitario de los puntos */
   loyalty_points_value: number
+  /** ¿Activo? */
   is_active: boolean
+  /** Fecha de creación */
   created_at: string
+  /** Fecha de última actualización */
   updated_at: string
 }
 
@@ -44,34 +58,51 @@ export interface CustomerQuery {
   offset?: number
 }
 
-/** Payload de creación/actualización de cliente (espejo de customerCreateBodySchema). */
+/** Datos para crear un cliente. */
 export interface CustomerInput {
   name: string
+  /** Opcional: descripción o datos adicionales. */
+  description?: string | null
+  /** Opcional: teléfono. */
   phone?: string | null
+  /** Opcional: correo electrónico. */
   email?: string | null
+  /** Opcional: dirección. */
   address?: string | null
+  /** Opcional: RFC. */
   rfc?: string | null
+  /** Límite de crédito (default: 0 = sin crédito). */
   credit_limit?: number
+  /** ¿Activo por defecto? */
   is_active?: boolean
 }
 
-/** Cargo o abono al crédito (POST /customers/:id/credit). */
+/** Abono o cargo a crédito (RF-VE-005). */
 export interface CustomerCreditAdjustment {
-  customer_id: string
+  /** Monto negativo = abono (reduce saldo). Monto positivo = cargo. */
   amount: number
+  /** Motivo obligatorio. */
   reason: string
+  /** Tipo: 'ADJUSTMENT' (cargo) o 'PAYMENT' (abono). */
+  type: 'ADJUSTMENT' | 'PAYMENT'
 }
 
-/** Pago a crédito (POST /customers/:id/payment). */
+/** Parámetros de pago para venta a crédito. */
 export interface CustomerPaymentPayload {
+  /** ID del cliente. */
   customer_id: string
+  /** Monto a cargar (positive) o abono (negative). */
   amount: number
+  /** Motivo obligatorio. */
   reason: string
 }
 
-/** Respuesta de un ajuste/pago de crédito (nuevo balance). */
+/** Respuesta de venta a crédito. */
 export interface CustomerCreditResponse {
+  /** Nuevo saldo del cliente. */
   new_balance: number
+  /** ¿Ultraa el límite? */
   exceeded_limit: boolean
+  /** Mensaje de validación. */
   message: string
 }
