@@ -557,6 +557,10 @@ export async function createSale(
       businessName: header.businessName,
       businessAddress: header.businessAddress,
       businessPhone: header.businessPhone,
+      businessEmail: header.businessEmail,
+      businessRfc: header.businessRfc,
+      ticketHeader: header.ticketHeader,
+      ticketFooter: header.ticketFooter,
       folio: sale.folio_display,
       createdAt: sale.created_at,
       items: resolved,
@@ -642,14 +646,27 @@ function isSqliteBusy(err: unknown): boolean {
 export async function loadTicketHeader(
   tx: typeof db,
   tenantId: string,
-): Promise<{ businessName: string; businessAddress: string | null; businessPhone: string | null }> {
+): Promise<{
+  businessName: string
+  businessAddress: string | null
+  businessPhone: string | null
+  businessEmail: string | null
+  businessRfc: string | null
+  ticketHeader: string | null
+  ticketFooter: string | null
+}> {
   const { rows } = await tx.query<{
     business_name: string | null
     business_address: string | null
     business_phone: string | null
+    business_email: string | null
+    business_rfc: string | null
+    ticket_header: string | null
+    ticket_footer: string | null
   }>(
     `SELECT COALESCE(ls.customer, ts.business_name, t.name, 'POS') AS business_name,
-            ts.business_address, ts.business_phone
+            ts.business_address, ts.business_phone, ts.business_email,
+            ts.business_rfc, ts.ticket_header, ts.ticket_footer
      FROM tenants t
      LEFT JOIN tenant_settings ts ON ts.tenant_id = t.id
      LEFT JOIN license_state ls ON ls.tenant_id = t.id
@@ -661,6 +678,10 @@ export async function loadTicketHeader(
     businessName: row?.business_name ?? 'POS',
     businessAddress: row?.business_address ?? null,
     businessPhone: row?.business_phone ?? null,
+    businessEmail: row?.business_email ?? null,
+    businessRfc: row?.business_rfc ?? null,
+    ticketHeader: row?.ticket_header || null,
+    ticketFooter: row?.ticket_footer || null,
   }
 }
 
@@ -946,6 +967,10 @@ interface TicketInput {
   businessName: string
   businessAddress?: string | null
   businessPhone?: string | null
+  businessEmail?: string | null
+  businessRfc?: string | null
+  ticketHeader?: string | null
+  ticketFooter?: string | null
   folio: string
   createdAt: string
   items: Array<{
@@ -973,8 +998,11 @@ interface TicketInput {
 function buildEscPosTicket(input: TicketInput): string {
   const lines: string[] = []
   lines.push(input.businessName.toUpperCase())
+  if (input.ticketHeader) lines.push(input.ticketHeader)
   if (input.businessAddress) lines.push(input.businessAddress)
   if (input.businessPhone) lines.push(`Tel: ${input.businessPhone}`)
+  if (input.businessEmail) lines.push(`Email: ${input.businessEmail}`)
+  if (input.businessRfc) lines.push(`RFC: ${input.businessRfc}`)
   lines.push(`FOLIO: ${input.folio}`)
   lines.push(new Date(input.createdAt).toLocaleString('es-MX'))
   lines.push('------------------------------')
@@ -1014,6 +1042,6 @@ function buildEscPosTicket(input: TicketInput): string {
     lines.push(`ESTADO: ${input.paymentState}`)
   }
   // El ticket termina en el pie: desktop agrega una línea en blanco y el corte.
-  lines.push('GRACIAS POR SU COMPRA')
+  lines.push(input.ticketFooter?.trim() || 'GRACIAS POR SU COMPRA')
   return lines.join('\n')
 }
