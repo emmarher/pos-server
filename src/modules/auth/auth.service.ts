@@ -17,14 +17,15 @@
  *   7) Firmar access (24h) + refresh (30d), registrar active_sessions.
  *
  * REFRESH (POST /auth/refresh):
- *   - Verifica el refresh token, busca la sesión activa por hash, emite
- *     un access token nuevo (rota el refresh: revoca el anterior).
+ *   - Verifica el refresh token, busca la sesión activa por hash, resuelve
+ *     permisos de BD y emite un access token nuevo con ellos (rota el
+ *     refresh: revoca el anterior). El refresh token NUNCA lleva permisos.
  *
  * MULTI-TENANT: toda query lleva tenant_id explícito o se resuelve por
  * la clave del tenant; nunca se confía en un tenant_id del body.
  * ────────────────────────────────────────────────────────────────────────
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import type { FastifyInstance } from 'fastify'
 import { env } from '../../config/env.js'
@@ -337,9 +338,11 @@ export async function refresh(
     throw new HttpError('UNAUTHORIZED', 'Token de refresco inválido')
   }
 
-  /* Sesión activa y vigente por hash del refresh token */
+  /* Sesión activa y vigente por hash del refresh token. El filtro is_valid=1
+     evita colisiones de hash: dos refresh firmados en el mismo segundo con el
+     mismo payload son idénticos, y la fila vieja (revocada) quedaría primera. */
   const sessions = await db.query<{ is_valid: number; expires_at: string }>(
-    'SELECT is_valid, expires_at FROM active_sessions WHERE tenant_id = $1 AND device_id = $2 AND user_id = $3 AND jwt_token_hash = $4',
+    'SELECT is_valid, expires_at FROM active_sessions WHERE tenant_id = $1 AND device_id = $2 AND user_id = $3 AND jwt_token_hash = $4 AND is_valid = 1',
     [payload.tenant_id, payload.device_id, payload.sub, hashToken(refreshToken)],
   )
   const session = sessions.rows[0]
@@ -361,21 +364,28 @@ export async function refresh(
     throw new HttpError('LICENSE_EXPIRED', 'Licencia vencida. Contacte a soporte.')
   }
 
+  /* El refresh token viaja SIN permisos (no se confía en él). Se resuelven
+     de BD en cada refresco: si se reusara payload.permissions llegarían
+     vacíos y todo requirePermission respondería 403 hasta volver a iniciar
+     sesión (bug de arranque: productos/categorías bloqueados). */
+  const { permissions, roleName } = await resolvePermissions(payload.sub)
+  const sessionPayload = {
+    sub: payload.sub,
+    tenant_id: payload.tenant_id,
+    device_id: payload.device_id,
+    role_name: roleName ?? payload.role_name,
+    permissions,
+  }
+
   /* Rotar refresh: revoca el anterior y emite uno nuevo */
   await db.query(
     'UPDATE active_sessions SET is_valid = 0 WHERE jwt_token_hash = $1',
     [hashToken(refreshToken)],
   )
 
-  const newRefresh = signRefresh(app, {
-    sub: payload.sub,
-    tenant_id: payload.tenant_id,
-    device_id: payload.device_id,
-    role_name: payload.role_name,
-    permissions: [],
-  })
+  const newRefresh = signRefresh(app, { ...sessionPayload, permissions: [] })
   const nowIso = new Date().toISOString()
-  const isExemptRefresh = payload.role_name === 'Administrador' ? 1 : 0
+  const isExemptRefresh = sessionPayload.role_name === 'Administrador' ? 1 : 0
   await db.query(
     `INSERT INTO active_sessions (tenant_id, device_id, user_id, jwt_token_hash, expires_at, ip_address, updated_at, last_heartbeat_at, is_heartbeat_exempt)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -392,7 +402,7 @@ export async function refresh(
     ],
   )
 
-  const newAccess = signAccess(app, payload)
+  const newAccess = signAccess(app, sessionPayload)
 
   const tenantInfo = await loadTenantInfo(payload.tenant_id)
   const userRows = await db.query<{ id: string; name: string }>(
@@ -412,8 +422,8 @@ export async function refresh(
       id: payload.sub,
       tenant_id: payload.tenant_id,
       name: user?.name ?? '',
-      role_name: payload.role_name,
-      permissions: payload.permissions,
+      role_name: sessionPayload.role_name,
+      permissions: sessionPayload.permissions,
     },
     tenant: tenantInfo.tenant,
     device: {
@@ -503,7 +513,9 @@ function signRefresh(
   payload: Omit<AuthJwtPayload, 'typ'>,
 ): string {
   return app.jwt.sign(
-    { ...payload, typ: 'refresh' },
+    /* jti evita que dos refresh del mismo segundo sean idénticos (misma
+       firma => mismo hash => replay de la rotación aceptado). */
+    { ...payload, typ: 'refresh', jti: randomUUID() },
     { expiresIn: REFRESH_EXPIRES_IN },
   )
 }

@@ -38,6 +38,8 @@ export interface AuthJwtPayload {
   permissions: string[]
   /** 'access' (24h) o 'refresh' (30d) — el refresh NO lleva permisos */
   typ: 'access' | 'refresh'
+  /** Identificador único del refresh (evita colisiones de hash al rotar) */
+  jti?: string
 }
 
 /* ── 2) MERGING PARA @fastify/jwt ─────────────────────────────────────── */
