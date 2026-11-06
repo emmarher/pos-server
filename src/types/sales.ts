@@ -98,7 +98,11 @@ export interface SaleDetail {
   tenant_id: string
   device_id: string
   seller_id: string
+  /** Nombre del cajero (JOIN users); null si el usuario ya no existe. */
+  seller_name: string | null
   customer_id: string | null
+  /** Nombre del cliente (JOIN customers); null en ventas de mostrador. */
+  customer_name: string | null
   folio_number: number
   folio_prefix: string
   folio: string

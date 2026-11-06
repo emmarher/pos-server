@@ -553,6 +553,15 @@ export async function createSale(
     /* 9) INSERT stored_tickets (ESC_POS de texto para reimpresión) */
     // Encabezado: licencia (D1) → business_name → nombre del tenant.
     const header = await loadTicketHeader(tx, tenant_id)
+    // Cajero/cliente para que la reimpresión muestre lo mismo que el papel.
+    const { rows: partyRows } = await tx.query<{
+      seller_name: string | null
+      customer_name: string | null
+    }>(
+      `SELECT (SELECT name FROM users WHERE id = $1) AS seller_name,
+              (SELECT name FROM customers WHERE tenant_id = $2 AND id = $3) AS customer_name`,
+      [seller_id, tenant_id, input.customer_id ?? null],
+    )
     const ticket = buildEscPosTicket({
       businessName: header.businessName,
       businessAddress: header.businessAddress,
@@ -563,9 +572,12 @@ export async function createSale(
       ticketFooter: header.ticketFooter,
       folio: sale.folio_display,
       createdAt: sale.created_at,
+      cashierName: partyRows[0]?.seller_name ?? null,
+      customerName: partyRows[0]?.customer_name ?? null,
       items: resolved,
       subtotal,
       discount,
+      tax,
       total,
       payments: input.payments,
       change: changeAmount,
@@ -692,10 +704,17 @@ export async function getSale(tenantId: string, saleId: string): Promise<SaleDet
   const { rows: saleRows } = await db.query<
     Omit<SaleDetail, 'folio' | 'items' | 'payments'> & { folio_display: string }
   >(
-    `SELECT id, tenant_id, device_id, seller_id, customer_id, folio_number, folio_prefix,
-            folio_display, subtotal, discount, tax, total, status, payment_state,
-            cancel_reason, notes, created_at
-     FROM sales WHERE tenant_id = $1 AND id = $2`,
+    `SELECT s.id, s.tenant_id, s.device_id, s.seller_id,
+            u.name AS seller_name,
+            s.customer_id,
+            c.name AS customer_name,
+            s.folio_number, s.folio_prefix,
+            s.folio_display, s.subtotal, s.discount, s.tax, s.total, s.status,
+            s.payment_state, s.cancel_reason, s.notes, s.created_at
+     FROM sales s
+     LEFT JOIN users u ON u.id = s.seller_id
+     LEFT JOIN customers c ON c.id = s.customer_id
+     WHERE s.tenant_id = $1 AND s.id = $2`,
     [tenantId, saleId],
   )
   const sale = saleRows[0]
@@ -723,7 +742,9 @@ export async function getSale(tenantId: string, saleId: string): Promise<SaleDet
     tenant_id: sale.tenant_id,
     device_id: sale.device_id,
     seller_id: sale.seller_id,
+    seller_name: sale.seller_name,
     customer_id: sale.customer_id,
+    customer_name: sale.customer_name,
     folio_number: sale.folio_number,
     folio_prefix: sale.folio_prefix,
     folio: sale.folio_display,
@@ -973,6 +994,8 @@ interface TicketInput {
   ticketFooter?: string | null
   folio: string
   createdAt: string
+  cashierName?: string | null
+  customerName?: string | null
   items: Array<{
     product: { name: string }
     quantity: number
@@ -983,6 +1006,7 @@ interface TicketInput {
   }>
   subtotal: number
   discount: number
+  tax: number
   total: number
   payments: CreateSalePayload['payments']
   change: number
@@ -998,13 +1022,15 @@ interface TicketInput {
 function buildEscPosTicket(input: TicketInput): string {
   const lines: string[] = []
   lines.push(input.businessName.toUpperCase())
-  if (input.ticketHeader) lines.push(input.ticketHeader)
-  if (input.businessAddress) lines.push(input.businessAddress)
-  if (input.businessPhone) lines.push(`Tel: ${input.businessPhone}`)
-  if (input.businessEmail) lines.push(`Email: ${input.businessEmail}`)
-  if (input.businessRfc) lines.push(`RFC: ${input.businessRfc}`)
+  if (input.ticketHeader?.trim()) lines.push(input.ticketHeader)
+  if (input.businessAddress?.trim()) lines.push(input.businessAddress)
+  if (input.businessPhone?.trim()) lines.push(`Tel: ${input.businessPhone}`)
+  if (input.businessEmail?.trim()) lines.push(`Email: ${input.businessEmail}`)
+  if (input.businessRfc?.trim()) lines.push(`RFC: ${input.businessRfc}`)
   lines.push(`FOLIO: ${input.folio}`)
   lines.push(new Date(input.createdAt).toLocaleString('es-MX'))
+  if (input.cashierName?.trim()) lines.push(`CAJERO: ${input.cashierName}`)
+  if (input.customerName?.trim()) lines.push(`CLIENTE: ${input.customerName}`)
   lines.push('------------------------------')
   for (const item of input.items) {
     const name = item.product.name
@@ -1022,6 +1048,9 @@ function buildEscPosTicket(input: TicketInput): string {
   if (input.discount > 0) {
     lines.push(`DESCUENTO: -$${input.discount.toFixed(2)}`)
   }
+  if (input.tax > 0) {
+    lines.push(`IMPUESTO:   $${input.tax.toFixed(2)}`)
+  }
   lines.push(`TOTAL:      $${input.total.toFixed(2)}`)
   lines.push('------------------------------')
   lines.push('PAGOS:')
@@ -1033,9 +1062,9 @@ function buildEscPosTicket(input: TicketInput): string {
       CREDIT: 'CREDITO',
       VOUCHER: 'VOUCHER',
     }
-    lines.push(`${label[payment.method] ?? payment.method}: $${Number(payment.amount).toFixed(2)}`)
-  }
-  if (input.change > 0) {
+    const ref = payment.reference_code ? ` ${payment.reference_code}` : ''
+    lines.push(`${label[payment.method] ?? payment.method}${ref}: $${Number(payment.amount).toFixed(2)}`)
+  }  if (input.change > 0) {
     lines.push(`VUELTO: $${input.change.toFixed(2)}`)
   }
   if (input.paymentState !== 'PAID') {
